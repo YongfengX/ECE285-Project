@@ -21,3 +21,6 @@ dependencies = [
 [project.scripts]
 train-qwen3-qlora-nq = "train_qwen3_qlora_nq:main"
 eval-compare-qwen3-qlora = "eval_compare_qwen3_qlora:main"
+
+[tool.setuptools]
+py-modules = ["train_qwen3_qlora_nq", "eval_compare_qwen3_qlora"]
