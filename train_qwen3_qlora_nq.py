@@ -219,6 +219,10 @@ def main() -> None:
         trust_remote_code=True,
     )
     model = prepare_model_for_kbit_training(model)
+    try:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    except TypeError:
+        model.gradient_checkpointing_enable()
 
     lora_config = LoraConfig(
         r=args.lora_r,

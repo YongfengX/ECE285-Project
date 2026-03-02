@@ -3,7 +3,9 @@ QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-0.6B` on `mandarjoshi/trivia_qa` 
 
 ## Files
 - `train_qwen3_qlora_nq.py`: training script
+- `train_qwen3_qlora_manual.py`: manual single-GPU loop (`for epoch ...`)
 - `eval_compare_qwen3_qlora.py`: compare base vs finetuned outputs
+- `chat_compare_qwen3_qlora.py`: interactive single-question compare chat
 - `pyproject.toml`: dependency and environment management
 
 ## Install uv
@@ -134,4 +136,60 @@ python eval_compare_qwen3_qlora.py \
 Script entry point:
 ```bash
 eval-compare-qwen3-qlora --adapter_path ./outputs/qwen3-0.6b-qlora-nq
+```
+
+### Quick Start (recommended)
+```bash
+uv run python eval_compare_qwen3_qlora.py \
+  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --max_eval_samples 20 \
+  --output_file ./outputs/eval_compare_results.json
+```
+
+### Key Args
+- `--adapter_path` (required): path to your finetuned LoRA adapter output.
+- `--max_eval_samples`: number of evaluation questions to compare.
+- `--max_new_tokens`: max generated answer length.
+- `--temperature`: `0.0` means deterministic decoding.
+- `--output_file`: JSON file to save side-by-side outputs.
+
+### Low-VRAM Mode
+```bash
+uv run python eval_compare_qwen3_qlora.py \
+  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --load_in_4bit
+```
+
+### LLM-as-a-Judge Scoring
+Use a third LLM to score Base vs Finetuned answers:
+```bash
+uv run python eval_compare_qwen3_qlora.py \
+  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --judge_model_name Qwen/Qwen2.5-3B-Instruct \
+  --max_eval_samples 20 \
+  --output_file ./outputs/eval_compare_with_judge.json
+```
+The output JSON will include a `judge` field per sample with parsed scores and winner.
+
+## Interactive Single-Prompt Compare
+Ask one question in terminal, get outputs from both models side by side:
+
+```bash
+uv run python chat_compare_qwen3_qlora.py \
+  --adapter_path ./outputs/qwen3-0.6b-qlora-nq
+```
+
+Type `exit` or `quit` to stop.
+
+## Manual Training Loop (Single GPU)
+If you prefer the classic loop style (`for epoch` / `for step`) instead of `Trainer`:
+
+```bash
+uv run python train_qwen3_qlora_manual.py
+```
+
+Resume from a checkpoint:
+```bash
+uv run python train_qwen3_qlora_manual.py \
+  --resume_checkpoint ./outputs/qwen3-0.6b-qlora-manual/checkpoint-200
 ```
