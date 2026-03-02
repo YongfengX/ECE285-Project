@@ -265,13 +265,22 @@ def main() -> None:
         label_pad_token_id=-100,
     )
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized_train,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
+    # Transformers API changed across versions: some versions removed `tokenizer=`.
+    try:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_train,
+            processing_class=tokenizer,
+            data_collator=data_collator,
+        )
+    except TypeError:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_train,
+            data_collator=data_collator,
+        )
 
     trainer.train(resume_from_checkpoint=checkpoint_to_resume)
     trainer.save_model(args.output_dir)
