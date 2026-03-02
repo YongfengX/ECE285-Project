@@ -12,12 +12,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Manual QLoRA training loop for Qwen3-0.6B on TriviaQA.")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser = argparse.ArgumentParser(description="Manual QLoRA training loop for Qwen3-4B on TriviaQA.")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--dataset_name", type=str, default="mandarjoshi/trivia_qa")
     parser.add_argument("--dataset_config", type=str, default="rc.nocontext")
     parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-0.6b-qlora-manual")
+    parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-4b-qlora-manual")
     parser.add_argument("--max_train_samples", type=int, default=20000)
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--num_train_epochs", type=int, default=1)

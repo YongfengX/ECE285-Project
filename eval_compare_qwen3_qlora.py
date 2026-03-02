@@ -11,8 +11,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compare base Qwen3-0.6B vs QLoRA-finetuned model outputs")
-    parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser = argparse.ArgumentParser(description="Compare base Qwen3-4B vs QLoRA-finetuned model outputs")
+    parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, required=True, help="Path to LoRA adapter output directory")
     parser.add_argument("--dataset_name", type=str, default="mandarjoshi/trivia_qa")
     parser.add_argument("--dataset_config", type=str, default="rc.nocontext")

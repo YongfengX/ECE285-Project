@@ -7,7 +7,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive compare chat: base model vs LoRA finetuned model")
-    parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, required=True, help="Path to LoRA adapter directory")
     parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--temperature", type=float, default=0.0)

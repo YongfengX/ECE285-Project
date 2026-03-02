@@ -17,12 +17,12 @@ from transformers.trainer_utils import get_last_checkpoint
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="QLoRA finetune Qwen3-0.6B on TriviaQA rc.nocontext")
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser = argparse.ArgumentParser(description="QLoRA finetune Qwen3-4B on TriviaQA rc.nocontext")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--dataset_name", type=str, default="mandarjoshi/trivia_qa")
     parser.add_argument("--dataset_config", type=str, default="rc.nocontext")
     parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-0.6b-qlora-nq")
+    parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-4b-qlora-nq")
     parser.add_argument("--max_train_samples", type=int, default=20000)
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)

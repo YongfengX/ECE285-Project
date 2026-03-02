@@ -1,5 +1,5 @@
 # ECE285-Project
-QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-0.6B` on `mandarjoshi/trivia_qa` (`rc.nocontext`).
+QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-4B` on `mandarjoshi/trivia_qa` (`rc.nocontext`).
 
 ## Files
 - `train_qwen3_qlora_nq.py`: training script
@@ -71,14 +71,14 @@ python train_qwen3_qlora_nq.py --auto_resume
 ```
 or:
 ```bash
-python train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-0.6b-qlora-nq/checkpoint-200
+python train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-nq/checkpoint-200
 ```
 
 ## How This QLoRA Works
 The training pipeline is:
 
 1. Load base model  
-`AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", ...)`
+`AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-4B", ...)`
 
 2. Enable 4-bit quantization (the "Q" in QLoRA)  
 With `BitsAndBytesConfig`:
@@ -107,7 +107,7 @@ Prompt tokens (`Question` part) are masked with `-100`, so loss is computed only
 Uses `Trainer + paged_adamw_8bit` with gradient accumulation and mixed precision to reduce VRAM usage.
 
 7. Save outputs  
-After training, LoRA adapter weights and tokenizer are saved to `output_dir` (default: `./outputs/qwen3-0.6b-qlora-nq`).
+After training, LoRA adapter weights and tokenizer are saved to `output_dir` (default: `./outputs/qwen3-4b-qlora-nq`).
 
 ## Common Args
 ```bash
@@ -125,7 +125,7 @@ Compare output quality between original model and LoRA-finetuned model:
 
 ```bash
 python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --adapter_path ./outputs/qwen3-4b-qlora-nq \
   --dataset_name mandarjoshi/trivia_qa \
   --dataset_config rc.nocontext \
   --eval_split validation \
@@ -135,13 +135,13 @@ python eval_compare_qwen3_qlora.py \
 
 Script entry point:
 ```bash
-eval-compare-qwen3-qlora --adapter_path ./outputs/qwen3-0.6b-qlora-nq
+eval-compare-qwen3-qlora --adapter_path ./outputs/qwen3-4b-qlora-nq
 ```
 
 ### Quick Start (recommended)
 ```bash
 uv run python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --adapter_path ./outputs/qwen3-4b-qlora-nq \
   --max_eval_samples 20 \
   --output_file ./outputs/eval_compare_results.json
 ```
@@ -156,7 +156,7 @@ uv run python eval_compare_qwen3_qlora.py \
 ### Low-VRAM Mode
 ```bash
 uv run python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
+  --adapter_path ./outputs/qwen3-4b-qlora-nq \
   --load_in_4bit
 ```
 
@@ -164,8 +164,8 @@ uv run python eval_compare_qwen3_qlora.py \
 Use a third LLM to score Base vs Finetuned answers:
 ```bash
 uv run python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
-  --judge_model_name Qwen/Qwen2.5-3B-Instruct \
+  --adapter_path ./outputs/qwen3-4b-qlora-nq \
+  --judge_model_name Qwen/Qwen3-4B \
   --max_eval_samples 20 \
   --output_file ./outputs/eval_compare_with_judge.json
 ```
@@ -176,7 +176,7 @@ Ask one question in terminal, get outputs from both models side by side:
 
 ```bash
 uv run python chat_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-0.6b-qlora-nq
+  --adapter_path ./outputs/qwen3-4b-qlora-nq
 ```
 
 Type `exit` or `quit` to stop.
@@ -191,5 +191,5 @@ uv run python train_qwen3_qlora_manual.py
 Resume from a checkpoint:
 ```bash
 uv run python train_qwen3_qlora_manual.py \
-  --resume_checkpoint ./outputs/qwen3-0.6b-qlora-manual/checkpoint-200
+  --resume_checkpoint ./outputs/qwen3-4b-qlora-manual/checkpoint-200
 ```
