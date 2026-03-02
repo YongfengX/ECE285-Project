@@ -17,10 +17,10 @@ from transformers.trainer_utils import get_last_checkpoint
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="QLoRA finetune Qwen3-0.6B on Natural Questions")
+    parser = argparse.ArgumentParser(description="QLoRA finetune Qwen3-0.6B on TriviaQA rc.nocontext")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
-    parser.add_argument("--dataset_name", type=str, default="natural_questions")
-    parser.add_argument("--dataset_config", type=str, default=None)
+    parser.add_argument("--dataset_name", type=str, default="mandarjoshi/trivia_qa")
+    parser.add_argument("--dataset_config", type=str, default="rc.nocontext")
     parser.add_argument("--train_split", type=str, default="train")
     parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-0.6b-qlora-nq")
     parser.add_argument("--max_train_samples", type=int, default=20000)
@@ -107,6 +107,16 @@ def _extract_from_annotation(example: Dict[str, Any], ann: Dict[str, Any]) -> Op
 def _extract_answer(example: Dict[str, Any]) -> Optional[str]:
     if "answer" in example and isinstance(example["answer"], str) and example["answer"].strip():
         return example["answer"].strip()
+    if "answer" in example and isinstance(example["answer"], dict):
+        ans = example["answer"]
+        value = ans.get("value")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        aliases = ans.get("aliases")
+        if isinstance(aliases, list) and aliases:
+            first = aliases[0]
+            if isinstance(first, str) and first.strip():
+                return first.strip()
     if "answers" in example:
         answers = example["answers"]
         if isinstance(answers, list) and answers:
@@ -146,7 +156,7 @@ def build_qa_dataset(raw_dataset: Dataset) -> Dataset:
         if q and a:
             qa_rows.append({"question": q, "answer": a})
     if not qa_rows:
-        raise ValueError("No valid (question, answer) pairs found in Natural Questions dataset.")
+        raise ValueError("No valid (question, answer) pairs found in dataset.")
     return Dataset.from_list(qa_rows)
 
 

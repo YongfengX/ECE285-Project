@@ -1,5 +1,5 @@
 # ECE285-Project
-QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-0.6B` on Google Natural Questions.
+QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-0.6B` on `mandarjoshi/trivia_qa` (`rc.nocontext`).
 
 ## Files
 - `train_qwen3_qlora_nq.py`: training script
@@ -53,9 +53,14 @@ or use the script entry point:
 train-qwen3-qlora-nq
 ```
 
-If your local Hugging Face dataset name differs, pass it explicitly:
+Current defaults are:
 ```bash
-python train_qwen3_qlora_nq.py --dataset_name google-research-datasets/natural_questions
+--dataset_name mandarjoshi/trivia_qa --dataset_config rc.nocontext
+```
+
+If you want to override:
+```bash
+python train_qwen3_qlora_nq.py --dataset_name <your_dataset> --dataset_config <your_config>
 ```
 
 Resume from checkpoint:
@@ -85,8 +90,8 @@ With `BitsAndBytesConfig`:
 - `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`
 - Base model weights stay frozen; only low-rank adapter params are updated.
 
-4. Process Natural Questions  
-The script extracts `question + answer` pairs across multiple possible field layouts (`annotations`, token spans, short answers).
+4. Process TriviaQA (and compatible QA datasets)  
+The script extracts `question + answer` pairs and supports TriviaQA-style answer fields (`answer.value` / `answer.aliases`) plus several common QA layouts.
 
 5. Supervised fine-tuning format  
 Each sample is formatted as:
@@ -119,7 +124,8 @@ Compare output quality between original model and LoRA-finetuned model:
 ```bash
 python eval_compare_qwen3_qlora.py \
   --adapter_path ./outputs/qwen3-0.6b-qlora-nq \
-  --dataset_name natural_questions \
+  --dataset_name mandarjoshi/trivia_qa \
+  --dataset_config rc.nocontext \
   --eval_split validation \
   --max_eval_samples 20 \
   --output_file ./outputs/eval_compare_results.json
