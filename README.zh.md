@@ -14,8 +14,10 @@
 ## 项目结构
 - `train_qwen3_qlora_nq.py`: Trainer 训练脚本
 - `train_qwen3_qlora_manual.py`: 手写训练循环脚本（单卡）
+- `train_qwen3_qlora_openr1_math.py`: OpenR1-Math-220k 推理风格训练脚本
 - `eval_compare_qwen3_qlora.py`: 批量对比评测脚本
 - `chat_compare_qwen3_qlora.py`: 交互式对比问答脚本
+- `chat_openr1_compare.py`: OpenR1 交互式推理对比脚本
 - `pyproject.toml`: 依赖与脚本入口管理
 
 ## 快速开始
@@ -124,6 +126,12 @@ Trainer 版本：
 python train_qwen3_qlora_nq.py
 ```
 
+OpenR1-Math-220k（推理数据）：
+```bash
+python train_qwen3_qlora_openr1_math.py
+```
+该脚本训练目标是 `Reasoning:` + `Answer:`，因此模型更容易输出推理过程。
+
 手写循环版本（单卡）：
 ```bash
 python train_qwen3_qlora_manual.py
@@ -185,6 +193,12 @@ python chat_compare_qwen3_qlora.py \
 ```
 
 输入 `exit` 或 `quit` 退出。
+
+OpenR1 推理对比：
+```bash
+python chat_openr1_compare.py \
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math
+```
 
 ## QLoRA 核心流程
 1. 加载基座模型：`Qwen/Qwen3-4B`

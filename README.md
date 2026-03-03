@@ -11,8 +11,10 @@ QLoRA fine-tuning pipeline for `Qwen/Qwen3-4B` on `mandarjoshi/trivia_qa` (`rc.n
 ## Project Structure
 - `train_qwen3_qlora_nq.py`: Trainer-based QLoRA training
 - `train_qwen3_qlora_manual.py`: manual `for epoch / for step` training loop
+- `train_qwen3_qlora_openr1_math.py`: OpenR1-Math-220k reasoning-style QLoRA training
 - `eval_compare_qwen3_qlora.py`: compare base and finetuned outputs
 - `chat_compare_qwen3_qlora.py`: interactive terminal compare
+- `chat_openr1_compare.py`: interactive OpenR1 reasoning compare chat
 - `pyproject.toml`: dependency and script management
 
 ## Quick Start
@@ -121,6 +123,12 @@ Trainer-based:
 python train_qwen3_qlora_nq.py
 ```
 
+OpenR1-Math-220k (reasoning data):
+```bash
+python train_qwen3_qlora_openr1_math.py
+```
+This training target uses `Reasoning:` + `Answer:` format, so outputs are more likely to include reasoning steps.
+
 Manual loop (single GPU):
 ```bash
 python train_qwen3_qlora_manual.py
@@ -182,6 +190,12 @@ python chat_compare_qwen3_qlora.py \
 ```
 
 Type `exit` or `quit` to stop.
+
+OpenR1 reasoning compare chat:
+```bash
+python chat_openr1_compare.py \
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math
+```
 
 ## Core QLoRA Design
 1. Load base model: `Qwen/Qwen3-4B`
