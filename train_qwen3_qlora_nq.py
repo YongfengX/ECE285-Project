@@ -1,4 +1,6 @@
 import argparse
+import importlib.util
+import math
 import os
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_seq_length", type=int, default=512)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
     parser.add_argument("--learning_rate", type=float, default=2e-4)
+    parser.add_argument("--warmup_ratio", type=float, default=0.03)
     parser.add_argument("--per_device_train_batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--logging_steps", type=int, default=20)
@@ -245,6 +248,22 @@ def main() -> None:
     qa_dataset = build_qa_dataset(raw_dataset)
     tokenized_train = tokenize_dataset(qa_dataset, tokenizer, args.max_seq_length)
 
+    steps_per_epoch = math.ceil(len(tokenized_train) / args.per_device_train_batch_size)
+    update_steps_per_epoch = math.ceil(steps_per_epoch / args.gradient_accumulation_steps)
+    total_train_steps = max(1, math.ceil(update_steps_per_epoch * args.num_train_epochs))
+    warmup_steps = int(total_train_steps * args.warmup_ratio)
+
+    enable_tensorboard = args.use_tensorboard
+    if enable_tensorboard:
+        has_tb = importlib.util.find_spec("tensorboard") is not None
+        has_tbx = importlib.util.find_spec("tensorboardX") is not None
+        if not (has_tb or has_tbx):
+            print("TensorBoard not installed. Disable TensorBoard logging for this run.")
+            print("Install with: uv pip install tensorboard")
+            enable_tensorboard = False
+        else:
+            os.environ["TENSORBOARD_LOGGING_DIR"] = tb_logging_dir
+
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -252,17 +271,16 @@ def main() -> None:
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        warmup_ratio=0.03,
+        warmup_steps=warmup_steps,
         lr_scheduler_type="cosine",
         logging_steps=args.logging_steps,
         save_strategy=args.save_strategy,
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
-        logging_dir=tb_logging_dir,
         bf16=use_bf16,
         fp16=(not use_bf16 and torch.cuda.is_available()),
         optim="paged_adamw_8bit",
-        report_to="tensorboard" if args.use_tensorboard else "none",
+        report_to="tensorboard" if enable_tensorboard else "none",
         remove_unused_columns=False,
     )
 
