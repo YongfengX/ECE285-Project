@@ -12,6 +12,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     DataCollatorForSeq2Seq,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
 )
@@ -24,22 +25,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset_name", type=str, default="oieieio/OpenR1-Math-220k")
     parser.add_argument("--dataset_config", type=str, default=None)
     parser.add_argument("--train_split", type=str, default="train")
+    parser.add_argument("--eval_split", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-4b-qlora-openr1-math")
     parser.add_argument("--max_train_samples", type=int, default=50000)
+    parser.add_argument("--max_eval_samples", type=int, default=2000)
     parser.add_argument("--max_seq_length", type=int, default=1024)
-    parser.add_argument("--num_train_epochs", type=float, default=1.0)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--warmup_ratio", type=float, default=0.03)
+    parser.add_argument("--num_train_epochs", type=float, default=3.0)
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
+    parser.add_argument("--warmup_ratio", type=float, default=0.06)
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=16)
     parser.add_argument("--logging_steps", type=int, default=20)
+    parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--save_steps", type=int, default=200)
     parser.add_argument("--save_total_limit", type=int, default=2)
-    parser.add_argument("--save_strategy", type=str, default="steps", choices=["steps", "epoch", "no"])
+    parser.add_argument("--save_strategy", type=str, default="epoch", choices=["steps", "epoch", "no"])
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
     parser.add_argument("--auto_resume", action="store_true")
     parser.add_argument("--use_tensorboard", action="store_true")
     parser.add_argument("--logging_dir", type=str, default=None)
+    parser.add_argument("--use_early_stopping", action="store_true")
+    parser.add_argument("--early_stopping_patience", type=int, default=3)
+    parser.add_argument("--early_stopping_threshold", type=float, default=0.0)
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
@@ -191,12 +198,22 @@ def main() -> None:
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    raw_dataset = load_dataset(args.dataset_name, args.dataset_config, split=args.train_split)
+    raw_train = load_dataset(args.dataset_name, args.dataset_config, split=args.train_split)
     if args.max_train_samples > 0:
-        raw_dataset = raw_dataset.select(range(min(args.max_train_samples, len(raw_dataset))))
+        raw_train = raw_train.select(range(min(args.max_train_samples, len(raw_train))))
 
-    train_dataset = build_reasoning_dataset(raw_dataset)
+    train_dataset = build_reasoning_dataset(raw_train)
     tokenized_train = tokenize_dataset(train_dataset, tokenizer, args.max_seq_length)
+
+    tokenized_eval = None
+    try:
+        raw_eval = load_dataset(args.dataset_name, args.dataset_config, split=args.eval_split)
+        if args.max_eval_samples > 0:
+            raw_eval = raw_eval.select(range(min(args.max_eval_samples, len(raw_eval))))
+        eval_dataset = build_reasoning_dataset(raw_eval)
+        tokenized_eval = tokenize_dataset(eval_dataset, tokenizer, args.max_seq_length)
+    except Exception as e:
+        print(f"Eval split '{args.eval_split}' is unavailable or invalid, disable eval/early-stopping. ({e})")
 
     steps_per_epoch = math.ceil(len(tokenized_train) / args.per_device_train_batch_size)
     update_steps_per_epoch = math.ceil(steps_per_epoch / args.gradient_accumulation_steps)
@@ -215,7 +232,7 @@ def main() -> None:
             os.environ["TENSORBOARD_LOGGING_DIR"] = tb_logging_dir
 
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    training_args = TrainingArguments(
+    training_kwargs = dict(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
         learning_rate=args.learning_rate,
@@ -233,6 +250,18 @@ def main() -> None:
         report_to="tensorboard" if enable_tensorboard else "none",
         remove_unused_columns=False,
     )
+    if tokenized_eval is not None:
+        training_kwargs["eval_strategy"] = "steps"
+        training_kwargs["eval_steps"] = args.eval_steps
+        training_kwargs["load_best_model_at_end"] = True
+        training_kwargs["metric_for_best_model"] = "eval_loss"
+        training_kwargs["greater_is_better"] = False
+    try:
+        training_args = TrainingArguments(**training_kwargs)
+    except TypeError:
+        if "eval_strategy" in training_kwargs:
+            training_kwargs["evaluation_strategy"] = training_kwargs.pop("eval_strategy")
+        training_args = TrainingArguments(**training_kwargs)
 
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
@@ -241,21 +270,36 @@ def main() -> None:
         label_pad_token_id=-100,
     )
 
+    trainer_kwargs = dict(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_train,
+        data_collator=data_collator,
+    )
+    if tokenized_eval is not None:
+        trainer_kwargs["eval_dataset"] = tokenized_eval
+
+    callbacks = []
+    if args.use_early_stopping and tokenized_eval is not None:
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_threshold,
+            )
+        )
+    elif args.use_early_stopping and tokenized_eval is None:
+        print("Early stopping requested but no eval split is available. Early stopping is disabled.")
+
+    if callbacks:
+        trainer_kwargs["callbacks"] = callbacks
+
     try:
         trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized_train,
+            **trainer_kwargs,
             processing_class=tokenizer,
-            data_collator=data_collator,
         )
     except TypeError:
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized_train,
-            data_collator=data_collator,
-        )
+        trainer = Trainer(**trainer_kwargs)
 
     trainer.train(resume_from_checkpoint=checkpoint_to_resume)
     trainer.save_model(args.output_dir)
