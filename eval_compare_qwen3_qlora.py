@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import gc
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -127,25 +128,6 @@ def main() -> None:
     quant_config = _load_quant_config(args.load_in_4bit)
     dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.base_model_name,
-        torch_dtype=dtype if torch.cuda.is_available() else torch.float32,
-        quantization_config=quant_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    base_model.eval()
-
-    finetuned_model = AutoModelForCausalLM.from_pretrained(
-        args.base_model_name,
-        torch_dtype=dtype if torch.cuda.is_available() else torch.float32,
-        quantization_config=quant_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    finetuned_model = PeftModel.from_pretrained(finetuned_model, args.adapter_path)
-    finetuned_model.eval()
-
     judge_tokenizer = None
     judge_model = None
     if args.judge_model_name:
@@ -156,7 +138,7 @@ def main() -> None:
 
         judge_model = AutoModelForCausalLM.from_pretrained(
             args.judge_model_name,
-            torch_dtype=dtype if torch.cuda.is_available() else torch.float32,
+            dtype=dtype if torch.cuda.is_available() else torch.float32,
             quantization_config=quant_config,
             device_map="auto",
             trust_remote_code=True,
@@ -175,12 +157,44 @@ def main() -> None:
     if not questions:
         raise ValueError("No valid question fields found in evaluation split.")
 
+    # Stage 1: run base model first.
+    base_model = AutoModelForCausalLM.from_pretrained(
+        args.base_model_name,
+        dtype=dtype if torch.cuda.is_available() else torch.float32,
+        quantization_config=quant_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    base_model.eval()
+    base_outputs: List[str] = []
+    for q in questions:
+        prompt = f"Question: {q}\nAnswer:"
+        out = _generate(base_model, tokenizer, prompt, args.max_new_tokens, args.temperature, args.top_p)
+        base_outputs.append(out)
+
+    # Free base model memory before loading finetuned model.
+    del base_model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # Stage 2: load base + LoRA adapter and run finetuned outputs.
+    finetuned_base = AutoModelForCausalLM.from_pretrained(
+        args.base_model_name,
+        dtype=dtype if torch.cuda.is_available() else torch.float32,
+        quantization_config=quant_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    finetuned_model = PeftModel.from_pretrained(finetuned_base, args.adapter_path)
+    finetuned_model.eval()
+
     results: List[Dict[str, str]] = []
     for idx, q in enumerate(questions, start=1):
         prompt = f"Question: {q}\nAnswer:"
-        base_out = _generate(base_model, tokenizer, prompt, args.max_new_tokens, args.temperature, args.top_p)
         ft_out = _generate(finetuned_model, tokenizer, prompt, args.max_new_tokens, args.temperature, args.top_p)
-        row = {
+        base_out = base_outputs[idx - 1]
+        row: Dict[str, Any] = {
             "id": str(idx),
             "question": q,
             "base_output": base_out,
