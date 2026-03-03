@@ -8,6 +8,7 @@ from datasets import Dataset, load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, get_cosine_schedule_with_warmup
 
 
@@ -28,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--logging_steps", type=int, default=20)
     parser.add_argument("--save_steps", type=int, default=200)
+    parser.add_argument("--use_tensorboard", action="store_true")
+    parser.add_argument("--logging_dir", type=str, default=None)
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
@@ -233,6 +236,8 @@ def load_resume_state(resume_dir: str) -> Tuple[int, int, int]:
 def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
+    tb_logging_dir = args.logging_dir or os.path.join(args.output_dir, "runs")
+    tb_writer = SummaryWriter(log_dir=tb_logging_dir) if args.use_tensorboard else None
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True, use_fast=False)
     if tokenizer.pad_token is None:
@@ -326,6 +331,9 @@ def main() -> None:
                     avg_loss = running_loss / args.logging_steps
                     lr = scheduler.get_last_lr()[0]
                     print(f"epoch={epoch+1} step={global_step} loss={avg_loss:.4f} lr={lr:.6e}")
+                    if tb_writer is not None:
+                        tb_writer.add_scalar("train/loss", avg_loss, global_step)
+                        tb_writer.add_scalar("train/lr", lr, global_step)
                     running_loss = 0.0
 
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
@@ -355,6 +363,8 @@ def main() -> None:
 
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    if tb_writer is not None:
+        tb_writer.close()
     print(f"Training complete. Final adapter saved to: {args.output_dir}")
 
 

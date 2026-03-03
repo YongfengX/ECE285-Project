@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_strategy", type=str, default="steps", choices=["steps", "epoch", "no"])
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
     parser.add_argument("--auto_resume", action="store_true")
+    parser.add_argument("--use_tensorboard", action="store_true")
+    parser.add_argument("--logging_dir", type=str, default=None)
     parser.add_argument("--lora_r", type=int, default=64)
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
@@ -206,6 +208,7 @@ def main() -> None:
         checkpoint_to_resume = get_last_checkpoint(args.output_dir)
         if checkpoint_to_resume:
             print(f"Auto-resume enabled. Found checkpoint: {checkpoint_to_resume}")
+    tb_logging_dir = args.logging_dir or os.path.join(args.output_dir, "runs")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True, use_fast=False)
     if tokenizer.pad_token is None:
@@ -255,10 +258,11 @@ def main() -> None:
         save_strategy=args.save_strategy,
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
+        logging_dir=tb_logging_dir,
         bf16=use_bf16,
         fp16=(not use_bf16 and torch.cuda.is_available()),
         optim="paged_adamw_8bit",
-        report_to="none",
+        report_to="tensorboard" if args.use_tensorboard else "none",
         remove_unused_columns=False,
     )
 

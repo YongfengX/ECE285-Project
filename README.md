@@ -1,128 +1,154 @@
 # ECE285-Project
-QLoRA fine-tuning for Hugging Face `Qwen/Qwen3-4B` on `mandarjoshi/trivia_qa` (`rc.nocontext`).
+English | [Chinese](./README.zh.md)
 
-## Files
-- `train_qwen3_qlora_nq.py`: training script
-- `train_qwen3_qlora_manual.py`: manual single-GPU loop (`for epoch ...`)
-- `eval_compare_qwen3_qlora.py`: compare base vs finetuned outputs
-- `chat_compare_qwen3_qlora.py`: interactive single-question compare chat
-- `pyproject.toml`: dependency and environment management
+QLoRA fine-tuning pipeline for `Qwen/Qwen3-4B` on `mandarjoshi/trivia_qa` (`rc.nocontext`), with:
+- trainer-based training
+- manual single-GPU loop training
+- base vs finetuned evaluation
+- interactive side-by-side chat compare
+- optional TensorBoard monitoring
 
-## Install uv
+## Project Structure
+- `train_qwen3_qlora_nq.py`: Trainer-based QLoRA training
+- `train_qwen3_qlora_manual.py`: manual `for epoch / for step` training loop
+- `eval_compare_qwen3_qlora.py`: compare base and finetuned outputs
+- `chat_compare_qwen3_qlora.py`: interactive terminal compare
+- `pyproject.toml`: dependency and script management
 
-### Windows (PowerShell)
+## Quick Start
 ```bash
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-### macOS / Linux
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Verify:
-```bash
-uv --version
-```
-
-## Environment Setup
-
-### Option 1: `venv + pip`
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -U pip
-pip install -e .
-```
-
-### Option 2: `uv` (recommended)
-```bash
-uv sync
-```
-`uv sync` will create/update the virtual environment and install all dependencies from `pyproject.toml`.
-
-Activate environment:
-```bash
-.venv\Scripts\activate
-```
-
-## Train
-```bash
+uv venv
+# Activate your .venv first (see UV Quickstart section)
+uv pip install "-e ."
 python train_qwen3_qlora_nq.py
 ```
-or use the script entry point:
-```bash
-train-qwen3-qlora-nq
-```
 
-Current defaults are:
+Default dataset:
 ```bash
 --dataset_name mandarjoshi/trivia_qa --dataset_config rc.nocontext
 ```
 
-If you want to override:
+## UV Quickstart
+### Install uv
+Recommended (with pipx):
 ```bash
-python train_qwen3_qlora_nq.py --dataset_name <your_dataset> --dataset_config <your_config>
+pip install pipx
+pipx ensurepath
+pipx install uv
+```
+
+Directly with pip:
+```bash
+pip install uv
+```
+
+Using brew (macOS/Linux):
+```bash
+brew install uv
+```
+
+### Create virtual environment
+```bash
+uv venv
+```
+or specify Python version:
+```bash
+uv venv -p 3.10
+```
+
+### Activate virtual environment
+macOS/Linux:
+```bash
+source .venv/bin/activate
+```
+
+Windows (Command Prompt):
+```bash
+.venv\Scripts\activate.bat
+```
+
+Windows (PowerShell):
+```bash
+.venv\Scripts\Activate.ps1
+```
+
+Exit environment:
+```bash
+deactivate
+```
+
+Delete virtual environment:
+```bash
+rm -rf .venv
+```
+
+### Install packages with uv pip
+From requirements file:
+```bash
+uv pip install -r requirements.txt
+```
+
+Install individual packages:
+```bash
+uv pip install requests beautifulsoup4
+```
+
+With extras:
+```bash
+uv pip install "celery[redis]"
+```
+
+From Git repository:
+```bash
+uv pip install "git+https://github.com/example/my-lib.git#egg=my-lib"
+```
+
+Local editable install:
+```bash
+uv pip install "-e ."
+```
+
+### Run project
+After `.venv` is activated, use:
+```bash
+python app.py
+```
+Key point: use `python` in the activated environment. Do not use `uv python`.
+
+## Training
+Trainer-based:
+```bash
+python train_qwen3_qlora_nq.py
+```
+
+Manual loop (single GPU):
+```bash
+python train_qwen3_qlora_manual.py
 ```
 
 Resume from checkpoint:
 ```bash
 python train_qwen3_qlora_nq.py --auto_resume
-```
-or:
-```bash
 python train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-nq/checkpoint-200
 ```
 
-## How This QLoRA Works
-The training pipeline is:
-
-1. Load base model  
-`AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-4B", ...)`
-
-2. Enable 4-bit quantization (the "Q" in QLoRA)  
-With `BitsAndBytesConfig`:
-- `load_in_4bit=True`
-- `bnb_4bit_quant_type="nf4"`
-- `bnb_4bit_use_double_quant=True`
-- `bnb_4bit_compute_dtype=bf16/fp16`
-
-3. Train LoRA adapters only (the "LoRA" in QLoRA)  
-`prepare_model_for_kbit_training(model)` is applied first, then `LoraConfig` is injected for:
-- `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`
-- Base model weights stay frozen; only low-rank adapter params are updated.
-
-4. Process TriviaQA (and compatible QA datasets)  
-The script extracts `question + answer` pairs and supports TriviaQA-style answer fields (`answer.value` / `answer.aliases`) plus several common QA layouts.
-
-5. Supervised fine-tuning format  
-Each sample is formatted as:
-```text
-Question: <question>
-Answer: <answer>
-```
-Prompt tokens (`Question` part) are masked with `-100`, so loss is computed only on answer tokens.
-
-6. Trainer and optimizer  
-Uses `Trainer + paged_adamw_8bit` with gradient accumulation and mixed precision to reduce VRAM usage.
-
-7. Save outputs  
-After training, LoRA adapter weights and tokenizer are saved to `output_dir` (default: `./outputs/qwen3-4b-qlora-nq`).
-
-## Common Args
+## TensorBoard
+Enable logging during training:
 ```bash
-python train_qwen3_qlora_nq.py \
-  --max_train_samples 20000 \
-  --max_seq_length 512 \
-  --num_train_epochs 1 \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 8 \
-  --learning_rate 2e-4
+python train_qwen3_qlora_nq.py --use_tensorboard
 ```
 
-## Evaluation: Base vs Finetuned
-Compare output quality between original model and LoRA-finetuned model:
+Launch TensorBoard:
+```bash
+tensorboard --logdir ./outputs/qwen3-4b-qlora-nq/runs --port 6006
+```
 
+Manual-loop TensorBoard logdir:
+```bash
+./outputs/qwen3-4b-qlora-manual/runs
+```
+
+## Evaluation (Base vs Finetuned)
 ```bash
 python eval_compare_qwen3_qlora.py \
   --adapter_path ./outputs/qwen3-4b-qlora-nq \
@@ -133,63 +159,36 @@ python eval_compare_qwen3_qlora.py \
   --output_file ./outputs/eval_compare_results.json
 ```
 
-Script entry point:
+Low-VRAM mode:
 ```bash
-eval-compare-qwen3-qlora --adapter_path ./outputs/qwen3-4b-qlora-nq
-```
-
-### Quick Start (recommended)
-```bash
-uv run python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-nq \
-  --max_eval_samples 20 \
-  --output_file ./outputs/eval_compare_results.json
-```
-
-### Key Args
-- `--adapter_path` (required): path to your finetuned LoRA adapter output.
-- `--max_eval_samples`: number of evaluation questions to compare.
-- `--max_new_tokens`: max generated answer length.
-- `--temperature`: `0.0` means deterministic decoding.
-- `--output_file`: JSON file to save side-by-side outputs.
-
-### Low-VRAM Mode
-```bash
-uv run python eval_compare_qwen3_qlora.py \
+python eval_compare_qwen3_qlora.py \
   --adapter_path ./outputs/qwen3-4b-qlora-nq \
   --load_in_4bit
 ```
 
-### LLM-as-a-Judge Scoring
-Use a third LLM to score Base vs Finetuned answers:
+LLM-as-a-judge:
 ```bash
-uv run python eval_compare_qwen3_qlora.py \
+python eval_compare_qwen3_qlora.py \
   --adapter_path ./outputs/qwen3-4b-qlora-nq \
   --judge_model_name Qwen/Qwen3-4B \
   --max_eval_samples 20 \
   --output_file ./outputs/eval_compare_with_judge.json
 ```
-The output JSON will include a `judge` field per sample with parsed scores and winner.
 
-## Interactive Single-Prompt Compare
-Ask one question in terminal, get outputs from both models side by side:
-
+## Interactive Compare Chat
 ```bash
-uv run python chat_compare_qwen3_qlora.py \
+python chat_compare_qwen3_qlora.py \
   --adapter_path ./outputs/qwen3-4b-qlora-nq
 ```
 
 Type `exit` or `quit` to stop.
 
-## Manual Training Loop (Single GPU)
-If you prefer the classic loop style (`for epoch` / `for step`) instead of `Trainer`:
-
-```bash
-uv run python train_qwen3_qlora_manual.py
-```
-
-Resume from a checkpoint:
-```bash
-uv run python train_qwen3_qlora_manual.py \
-  --resume_checkpoint ./outputs/qwen3-4b-qlora-manual/checkpoint-200
-```
+## Core QLoRA Design
+1. Load base model: `Qwen/Qwen3-4B`
+2. Apply 4-bit quantization (`nf4`, double quant)
+3. Insert LoRA adapters on attention/MLP projections
+4. Build QA pairs from TriviaQA fields
+5. Supervised format:
+   `Question: ...`
+   `Answer: ...`
+6. Mask prompt labels with `-100`, optimize answer tokens only
