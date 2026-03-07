@@ -26,6 +26,7 @@ train-qwen3-qlora-openr1-math = "train_qwen3_qlora_openr1_math:main"
 eval-compare-qwen3-qlora = "eval_compare_qwen3_qlora:main"
 chat-compare-qwen3-qlora = "chat_compare_qwen3_qlora:main"
 chat-openr1-compare = "chat_openr1_compare:main"
+chat-linear-algebra-skill = "chat_linear_algebra_skill:main"
 
 [tool.setuptools]
-py-modules = ["train_qwen3_qlora_nq", "train_qwen3_qlora_manual", "train_qwen3_qlora_openr1_math", "eval_compare_qwen3_qlora", "chat_compare_qwen3_qlora", "chat_openr1_compare"]
+py-modules = ["train_qwen3_qlora_nq", "train_qwen3_qlora_manual", "train_qwen3_qlora_openr1_math", "eval_compare_qwen3_qlora", "chat_compare_qwen3_qlora", "chat_openr1_compare", "chat_linear_algebra_skill"]

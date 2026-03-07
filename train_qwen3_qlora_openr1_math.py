@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
@@ -24,8 +24,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--dataset_name", type=str, default="oieieio/OpenR1-Math-220k")
     parser.add_argument("--dataset_config", type=str, default=None)
-    parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--eval_split", type=str, default="validation")
+    parser.add_argument("--train_split", type=str, default="default")
+    parser.add_argument("--eval_split", type=str, default="extended")
+    parser.add_argument("--eval_ratio", type=float, default=0.02)
     parser.add_argument("--output_dir", type=str, default="./outputs/qwen3-4b-qlora-openr1-math")
     parser.add_argument("--max_train_samples", type=int, default=50000)
     parser.add_argument("--max_eval_samples", type=int, default=2000)
@@ -157,6 +158,38 @@ def get_4bit_config() -> BitsAndBytesConfig:
     )
 
 
+def resolve_train_eval_splits(args: argparse.Namespace, ds_dict: DatasetDict) -> (Dataset, Optional[Dataset]):
+    available = list(ds_dict.keys())
+
+    # Resolve train split with compatibility fallback.
+    if args.train_split in ds_dict:
+        raw_train = ds_dict[args.train_split]
+    elif args.train_split == "train" and "default" in ds_dict:
+        print("Split 'train' not found. Fallback to 'default' for training.")
+        raw_train = ds_dict["default"]
+    else:
+        raise ValueError(f"Unknown train split '{args.train_split}'. Available splits: {available}")
+
+    raw_eval = None
+    if args.eval_split:
+        if args.eval_split in ds_dict:
+            raw_eval = ds_dict[args.eval_split]
+        elif args.eval_split in {"validation", "eval"} and "extended" in ds_dict:
+            print(f"Split '{args.eval_split}' not found. Fallback to 'extended' for eval.")
+            raw_eval = ds_dict["extended"]
+        else:
+            print(f"Eval split '{args.eval_split}' not found. Available splits: {available}.")
+
+    # If eval split is still missing and early stopping is requested, make a holdout split.
+    if raw_eval is None and args.use_early_stopping:
+        print(f"Creating eval holdout from train with eval_ratio={args.eval_ratio}.")
+        split = raw_train.train_test_split(test_size=args.eval_ratio, seed=42)
+        raw_train = split["train"]
+        raw_eval = split["test"]
+
+    return raw_train, raw_eval
+
+
 def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -198,7 +231,8 @@ def main() -> None:
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    raw_train = load_dataset(args.dataset_name, args.dataset_config, split=args.train_split)
+    ds_dict = load_dataset(args.dataset_name, args.dataset_config)
+    raw_train, raw_eval = resolve_train_eval_splits(args, ds_dict)
     if args.max_train_samples > 0:
         raw_train = raw_train.select(range(min(args.max_train_samples, len(raw_train))))
 
@@ -206,14 +240,14 @@ def main() -> None:
     tokenized_train = tokenize_dataset(train_dataset, tokenizer, args.max_seq_length)
 
     tokenized_eval = None
-    try:
-        raw_eval = load_dataset(args.dataset_name, args.dataset_config, split=args.eval_split)
-        if args.max_eval_samples > 0:
-            raw_eval = raw_eval.select(range(min(args.max_eval_samples, len(raw_eval))))
-        eval_dataset = build_reasoning_dataset(raw_eval)
-        tokenized_eval = tokenize_dataset(eval_dataset, tokenizer, args.max_seq_length)
-    except Exception as e:
-        print(f"Eval split '{args.eval_split}' is unavailable or invalid, disable eval/early-stopping. ({e})")
+    if raw_eval is not None:
+        try:
+            if args.max_eval_samples > 0:
+                raw_eval = raw_eval.select(range(min(args.max_eval_samples, len(raw_eval))))
+            eval_dataset = build_reasoning_dataset(raw_eval)
+            tokenized_eval = tokenize_dataset(eval_dataset, tokenizer, args.max_seq_length)
+        except Exception as e:
+            print(f"Eval split is unavailable or invalid, disable eval/early-stopping. ({e})")
 
     steps_per_epoch = math.ceil(len(tokenized_train) / args.per_device_train_batch_size)
     update_steps_per_epoch = math.ceil(steps_per_epoch / args.gradient_accumulation_steps)
