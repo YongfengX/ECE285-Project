@@ -1,4 +1,5 @@
 import argparse
+import concurrent.futures
 import json
 import os
 import random
@@ -15,10 +16,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
 DIMENSION_WEIGHTS = {
-    "correctness": 0.40,
-    "reasoning": 0.20,
-    "completeness": 0.15,
-    "clarity": 0.15,
+    "correctness": 0.70,
+    "reasoning": 0.10,
+    "completeness": 0.05,
+    "clarity": 0.05,
     "instruction_following": 0.10,
 }
 
@@ -34,21 +35,20 @@ def parse_args() -> argparse.Namespace:
         description="Compare a fine-tuned model against Qwen3-4B using MiniMax as an LLM judge."
     )
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
-    parser.add_argument("--adapter_path", type=str, required=True, help="Path to your LoRA adapter directory")
-    parser.add_argument("--judge_model_name", type=str, default="MiniMax-M2.5")
+    parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400/")
+    parser.add_argument("--judge_model_name", type=str, default="qwen3.5-plus")
     parser.add_argument(
         "--judge_api_key",
         type=str,
-        required=True,
-        help="API key for the DashScope-compatible MiniMax endpoint.",
+        default="sk-345e0f458bdd4291826b54bac8099ad2",
     )
-    parser.add_argument("--dataset_name", type=str, default="gsm8k")
-    parser.add_argument("--dataset_config", type=str, default="main")
-    parser.add_argument("--dataset_split", type=str, default="test")
+    parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
+    parser.add_argument("--dataset_config", type=str, default="default")
+    parser.add_argument("--dataset_split", type=str, default="train")
     parser.add_argument(
         "--dataset_format",
         type=str,
-        default="auto",
+        default="competition_math",
         choices=[
             "auto",
             "gsm8k",
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_file", type=str, default="./outputs/eval_compare_with_minimax_gsm8k.json")
+    parser.add_argument("--output_file", type=str, default="./outputs/eval_compare_with_minimax_competition_math.json")
     parser.add_argument(
         "--prompt_style",
         type=str,
@@ -78,6 +78,23 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Retry count when the judge response is not valid JSON.",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=4,
+        help="Number of concurrent judge worker threads.",
+    )
+    parser.add_argument(
+        "--log_file",
+        type=str,
+        default="",
+        help="JSONL log file for per-sample incremental results. Defaults to <output_file>.jsonl.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from existing output/log files and skip completed sample indices.",
     )
     return parser.parse_args()
 
@@ -188,6 +205,14 @@ def extract_boxed_answer(text: str) -> str:
     return normalize_final_answer(text)
 
 
+def extract_final_answer_from_response(text: str) -> str:
+    stripped = text.strip()
+    answer_match = re.search(r"Answer:\s*(.+)$", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if answer_match:
+        stripped = answer_match.group(1).strip()
+    return extract_boxed_answer(stripped)
+
+
 def normalize_final_answer(text: str) -> str:
     text = text.strip()
     text = text.replace(",", "")
@@ -207,7 +232,7 @@ def detect_dataset_format(dataset_name: str, column_names: List[str]) -> str:
     cols = set(column_names)
     if lowered == "gsm8k" or {"question", "answer"}.issubset(cols):
         return "gsm8k"
-    if lowered == "hendrycks/competition_math" or {"problem", "solution"}.issubset(cols):
+    if lowered in {"hendrycks/competition_math", "qwedsacf/competition_math"} or {"problem", "solution"}.issubset(cols):
         return "competition_math"
     if lowered == "chilled/svamp" or {"Body", "Question", "Answer"}.issubset(cols):
         return "svamp"
@@ -272,7 +297,29 @@ def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, st
 
 
 def build_eval_dataset(args: argparse.Namespace) -> Dataset:
-    dataset = load_dataset(args.dataset_name, args.dataset_config, split=args.dataset_split)
+    try:
+        dataset = load_dataset(args.dataset_name, args.dataset_config, split=args.dataset_split)
+    except ValueError as exc:
+        message = str(exc)
+        if "Unknown split" not in message:
+            raise
+
+        dataset_dict = load_dataset(args.dataset_name, args.dataset_config)
+        available_splits = list(dataset_dict.keys())
+        if len(available_splits) != 1:
+            raise ValueError(
+                f"Requested split {args.dataset_split!r} is unavailable for {args.dataset_name!r}. "
+                f"Available splits: {available_splits}."
+            ) from exc
+
+        fallback_split = available_splits[0]
+        print(
+            f"[info] requested split {args.dataset_split!r} is unavailable for {args.dataset_name}. "
+            f"Falling back to the only available split: {fallback_split!r}."
+        )
+        args.dataset_split = fallback_split
+        dataset = dataset_dict[fallback_split]
+
     if args.max_samples > 0:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset_format = args.dataset_format
@@ -307,6 +354,13 @@ def strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+def repair_json_escapes(text: str) -> str:
+    # Judges sometimes emit LaTeX like \boxed or \frac inside JSON strings.
+    # Escape backslashes that are not part of valid JSON escape sequences.
+    text = re.sub(r"\\(?![\"\\/bfnrt]|u[0-9a-fA-F]{4})", r"\\\\", text)
+    return text
+
+
 def extract_json_object(text: str) -> Dict[str, Any]:
     cleaned = strip_code_fence(text)
     try:
@@ -314,8 +368,13 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
         if not match:
-            raise
-        return json.loads(match.group(0))
+            return json.loads(repair_json_escapes(cleaned))
+
+        candidate = match.group(0)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return json.loads(repair_json_escapes(candidate))
 
 
 def weighted_total(scores: Dict[str, float]) -> float:
@@ -343,22 +402,26 @@ def build_judge_messages(
     answer_a: str,
     answer_b: str,
 ) -> List[Dict[str, str]]:
+    answer_a_final = extract_final_answer_from_response(answer_a)
+    answer_b_final = extract_final_answer_from_response(answer_b)
     rubric_text = (
         "You are an impartial evaluator.\n"
         "Score each model on a 0-10 scale for these dimensions:\n"
-        "- correctness: factual and mathematical correctness of the final answer\n"
+        "- correctness: mathematical correctness of the final answer, with overwhelming priority\n"
         "- reasoning: soundness and usefulness of the reasoning process\n"
         "- completeness: whether the response fully addresses the problem\n"
         "- clarity: readability, structure, and clarity\n"
         "- instruction_following: whether the response follows the requested format and task\n\n"
         "Weight the dimensions as:\n"
-        "- correctness: 0.40\n"
-        "- reasoning: 0.20\n"
-        "- completeness: 0.15\n"
-        "- clarity: 0.15\n"
+        "- correctness: 0.70\n"
+        "- reasoning: 0.10\n"
+        "- completeness: 0.05\n"
+        "- clarity: 0.05\n"
         "- instruction_following: 0.10\n\n"
-        "Use the reference answer for correctness, but do not blindly reward longer answers.\n"
-        "Be strict about incorrect final answers.\n"
+        "The final answer matters far more than the reasoning quality.\n"
+        "If a model's final answer is wrong, score correctness very low even if the reasoning looks strong.\n"
+        "If a model's final answer matches the reference, reward it strongly even when the reasoning is brief.\n"
+        "Do not blindly reward longer answers.\n"
         "Return valid JSON only with this schema:\n"
         "{\n"
         '  "model_a": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
@@ -371,7 +434,9 @@ def build_judge_messages(
         f"Question:\n{question}\n\n"
         f"Reference reasoning:\n{reference_reasoning or '[not provided]'}\n\n"
         f"Reference final answer:\n{reference_answer}\n\n"
+        f"Model A extracted final answer:\n{answer_a_final}\n\n"
         f"Model A response:\n{answer_a}\n\n"
+        f"Model B extracted final answer:\n{answer_b_final}\n\n"
         f"Model B response:\n{answer_b}\n"
     )
     return [
@@ -462,6 +527,9 @@ def judge_pair(
     return {
         "base_scores": base_scores,
         "finetuned_scores": finetuned_scores,
+        "base_final_answer": extract_final_answer_from_response(base_answer),
+        "finetuned_final_answer": extract_final_answer_from_response(finetuned_answer),
+        "reference_final_answer": reference_answer,
         "winner": winner,
         "forward_summary": str(forward.get("summary", "")).strip(),
         "reverse_summary": str(reverse.get("summary", "")).strip(),
@@ -495,73 +563,70 @@ def aggregate_results(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def main() -> None:
-    args = parse_args()
-    random.seed(args.seed)
-    os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
+def resolve_log_file(args: argparse.Namespace) -> str:
+    if args.log_file:
+        return args.log_file
+    base, _ = os.path.splitext(args.output_file)
+    return f"{base}.jsonl"
 
-    print("Loading models...")
-    base_bundle, finetuned_bundle = load_base_and_adapter(args)
 
-    print("Loading evaluation dataset...")
-    dataset = build_eval_dataset(args)
-    client = make_judge_client(args.judge_api_key)
+def resolve_answer_cache_file(log_file: str) -> str:
+    base, ext = os.path.splitext(log_file)
+    suffix = ext or ".jsonl"
+    return f"{base}.answers{suffix}"
 
-    results: List[Dict[str, Any]] = []
-    for idx, row in enumerate(dataset):
-        question = str(row["question"]).strip()
-        reference_reasoning = str(row.get("reference_reasoning", "")).strip()
-        reference_answer = str(row.get("reference_answer", "")).strip()
 
-        print(f"[{idx + 1}/{len(dataset)}] Generating base answer...")
-        base_answer = generate_answer(
-            bundle=base_bundle,
-            question=question,
-            prompt_style=args.prompt_style,
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-        )
+def load_existing_results(output_file: str, log_file: str) -> List[Dict[str, Any]]:
+    by_index: Dict[int, Dict[str, Any]] = {}
 
-        print(f"[{idx + 1}/{len(dataset)}] Generating finetuned answer...")
-        finetuned_answer = generate_answer(
-            bundle=finetuned_bundle,
-            question=question,
-            prompt_style=args.prompt_style,
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
-        )
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            for sample in payload.get("samples", []):
+                by_index[int(sample["index"])] = sample
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] failed to load existing output file {output_file}: {exc}")
 
-        print(f"[{idx + 1}/{len(dataset)}] Judging with {args.judge_model_name}...")
-        judge_result = judge_pair(
-            client=client,
-            args=args,
-            question=question,
-            reference_reasoning=reference_reasoning,
-            reference_answer=reference_answer,
-            base_answer=base_answer,
-            finetuned_answer=finetuned_answer,
-        )
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    sample = json.loads(line)
+                    by_index[int(sample["index"])] = sample
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] failed to load existing log file {log_file}: {exc}")
 
-        sample_result = {
-            "index": idx,
-            "question": question,
-            "reference_reasoning": reference_reasoning,
-            "reference_answer": reference_answer,
-            "base_answer": base_answer,
-            "finetuned_answer": finetuned_answer,
-            "judge": judge_result,
-        }
-        results.append(sample_result)
+    return [by_index[idx] for idx in sorted(by_index)]
 
-        print(
-            f"[{idx + 1}/{len(dataset)}] "
-            f"base={judge_result['base_scores']['total']:.2f} "
-            f"finetuned={judge_result['finetuned_scores']['total']:.2f} "
-            f"winner={judge_result['winner']}"
-        )
 
+def append_log_record(log_file: str, sample_result: Dict[str, Any]) -> None:
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(sample_result, ensure_ascii=False) + "\n")
+
+
+def load_answer_cache(answer_cache_file: str) -> Dict[int, Dict[str, Any]]:
+    by_index: Dict[int, Dict[str, Any]] = {}
+    if not os.path.exists(answer_cache_file):
+        return by_index
+
+    try:
+        with open(answer_cache_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                sample = json.loads(line)
+                by_index[int(sample["index"])] = sample
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] failed to load answer cache {answer_cache_file}: {exc}")
+    return by_index
+
+
+def write_output_snapshot(args: argparse.Namespace, results: List[Dict[str, Any]]) -> None:
     summary = aggregate_results(results)
     output = {
         "config": {
@@ -575,17 +640,149 @@ def main() -> None:
             "max_samples": args.max_samples,
             "prompt_style": args.prompt_style,
             "weights": DIMENSION_WEIGHTS,
+            "threads": args.threads,
+            "log_file": resolve_log_file(args),
         },
         "summary": summary,
-        "samples": results,
+        "samples": sorted(results, key=lambda sample: int(sample["index"])),
     }
 
     with open(args.output_file, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
+
+def judge_sample_task(
+    args: argparse.Namespace,
+    sample_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    client = make_judge_client(args.judge_api_key)
+    judge_result = judge_pair(
+        client=client,
+        args=args,
+        question=sample_payload["question"],
+        reference_reasoning=sample_payload["reference_reasoning"],
+        reference_answer=sample_payload["reference_answer"],
+        base_answer=sample_payload["base_answer"],
+        finetuned_answer=sample_payload["finetuned_answer"],
+    )
+    return {
+        **sample_payload,
+        "judge": judge_result,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    random.seed(args.seed)
+    os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
+    log_file = resolve_log_file(args)
+    answer_cache_file = resolve_answer_cache_file(log_file)
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(answer_cache_file) or ".", exist_ok=True)
+
+    print("Loading models...")
+    base_bundle, finetuned_bundle = load_base_and_adapter(args)
+
+    print("Loading evaluation dataset...")
+    dataset = build_eval_dataset(args)
+    results = load_existing_results(args.output_file, log_file) if args.resume else []
+    cached_answers = load_answer_cache(answer_cache_file) if args.resume else {}
+    results_by_index: Dict[int, Dict[str, Any]] = {int(sample["index"]): sample for sample in results}
+    completed_indices = set(results_by_index)
+    if completed_indices:
+        print(f"[resume] loaded {len(completed_indices)} completed samples from existing files.")
+    if cached_answers:
+        print(f"[resume] loaded {len(cached_answers)} generated-answer cache entries.")
+
+    total_samples = len(dataset)
+    pending_futures: Dict[concurrent.futures.Future, int] = {}
+
+    def flush_completed(block: bool) -> None:
+        if not pending_futures:
+            return
+        done, _ = concurrent.futures.wait(
+            pending_futures.keys(),
+            timeout=None if block else 0,
+            return_when=concurrent.futures.FIRST_COMPLETED if not block else concurrent.futures.ALL_COMPLETED,
+        )
+        for future in done:
+            idx = pending_futures.pop(future)
+            sample_result = future.result()
+            results_by_index[idx] = sample_result
+            append_log_record(log_file, sample_result)
+            write_output_snapshot(args, list(results_by_index.values()))
+            judge_result = sample_result["judge"]
+            print(
+                f"[{idx + 1}/{total_samples}] "
+                f"base={judge_result['base_scores']['total']:.2f} "
+                f"finetuned={judge_result['finetuned_scores']['total']:.2f} "
+                f"winner={judge_result['winner']}"
+            )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.threads)) as executor:
+        for idx, row in enumerate(dataset):
+            if idx in completed_indices:
+                print(f"[{idx + 1}/{total_samples}] Skipping completed sample from resume log.")
+                continue
+
+            while len(pending_futures) >= max(1, args.threads):
+                flush_completed(block=True)
+
+            if idx in cached_answers:
+                sample_payload = cached_answers[idx]
+                print(f"[{idx + 1}/{total_samples}] Reusing cached generated answers.")
+            else:
+                question = str(row["question"]).strip()
+                reference_reasoning = str(row.get("reference_reasoning", "")).strip()
+                reference_answer = str(row.get("reference_answer", "")).strip()
+
+                print(f"[{idx + 1}/{total_samples}] Generating base answer...")
+                base_answer = generate_answer(
+                    bundle=base_bundle,
+                    question=question,
+                    prompt_style=args.prompt_style,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                )
+
+                print(f"[{idx + 1}/{total_samples}] Generating finetuned answer...")
+                finetuned_answer = generate_answer(
+                    bundle=finetuned_bundle,
+                    question=question,
+                    prompt_style=args.prompt_style,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                )
+
+                sample_payload = {
+                    "index": idx,
+                    "question": question,
+                    "reference_reasoning": reference_reasoning,
+                    "reference_answer": reference_answer,
+                    "base_answer": base_answer,
+                    "finetuned_answer": finetuned_answer,
+                }
+                append_log_record(answer_cache_file, sample_payload)
+                cached_answers[idx] = sample_payload
+
+            print(f"[{idx + 1}/{total_samples}] Judging with {args.judge_model_name}...")
+            future = executor.submit(judge_sample_task, args, sample_payload)
+            pending_futures[future] = idx
+            flush_completed(block=False)
+
+        flush_completed(block=True)
+
+    results = sorted(results_by_index.values(), key=lambda sample: int(sample["index"]))
+    summary = aggregate_results(results)
+    write_output_snapshot(args, results)
+
     print("\n=== Aggregate Summary ===")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"\nSaved results to: {args.output_file}")
+    print(f"Incremental log saved to: {log_file}")
+    print(f"Generated-answer cache saved to: {answer_cache_file}")
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive OpenR1 compare chat: base vs finetuned (reasoning style)")
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
-    parser.add_argument("--adapter_path", type=str, required=True, help="Path to LoRA adapter directory")
-    parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400")
+    parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")

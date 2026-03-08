@@ -223,7 +223,7 @@ The script normalizes supported datasets into a common schema before generation 
 ### Additional Evaluation Datasets
 Besides `gsm8k`, the evaluation script now supports these datasets directly:
 
-- `hendrycks/competition_math`
+- `qwedsacf/competition_math`
 - `ChilleD/SVAMP`
 - `tau/commonsense_qa`
 - `allenai/ai2_arc`
@@ -251,7 +251,7 @@ Competition Math:
 python eval_compare_with_minimax.py ^
   --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
   --judge_api_key YOUR_API_KEY ^
-  --dataset_name hendrycks/competition_math ^
+  --dataset_name qwedsacf/competition_math ^
   --dataset_config default ^
   --dataset_split test ^
   --dataset_format competition_math ^
