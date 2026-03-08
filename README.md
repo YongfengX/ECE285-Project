@@ -1,208 +1,209 @@
-# ECE285-Project
-English | [Chinese](./README.zh.md)
+# ECE285 Project
+English | [中文](./README.zh.md)
 
-QLoRA fine-tuning pipeline for `Qwen/Qwen3-4B` on `mandarjoshi/trivia_qa` (`rc.nocontext`), with:
-- trainer-based training
-- manual single-GPU loop training
-- base vs finetuned evaluation
-- interactive side-by-side chat compare
-- optional TensorBoard monitoring
+This repository currently contains three related workflows built around `Qwen/Qwen3-4B`:
 
-## Project Structure
-- `train_qwen3_qlora_nq.py`: Trainer-based QLoRA training
-- `train_qwen3_qlora_manual.py`: manual `for epoch / for step` training loop
-- `train_qwen3_qlora_openr1_math.py`: OpenR1-Math-220k reasoning-style QLoRA training
-- `eval_compare_qwen3_qlora.py`: compare base and finetuned outputs
-- `chat_compare_qwen3_qlora.py`: interactive terminal compare
-- `chat_openr1_compare.py`: interactive OpenR1 reasoning compare chat
-- `pyproject.toml`: dependency and script management
+- QLoRA fine-tuning on TriviaQA-style question answering under [`nq/`](./nq)
+- QLoRA fine-tuning on `oieieio/OpenR1-Math-220k` for reasoning-style math responses
+- An interactive chat entrypoint that injects a local linear algebra skill prompt bundle
 
-## Quick Start
-```bash
-uv venv
-# Activate your .venv first (see UV Quickstart section)
-uv pip install "-e ."
-python train_qwen3_qlora_nq.py
-```
+The previous README referenced scripts that are no longer in the repository root. This version reflects the files that actually exist today.
 
-Default dataset:
-```bash
---dataset_name mandarjoshi/trivia_qa --dataset_config rc.nocontext
-```
+## Repository Layout
+- [`nq/train_qwen3_qlora_nq.py`](./nq/train_qwen3_qlora_nq.py): trainer-based QLoRA training for TriviaQA-format QA
+- [`nq/train_qwen3_qlora_manual.py`](./nq/train_qwen3_qlora_manual.py): manual single-GPU training loop
+- [`nq/chat_compare_qwen3_qlora.py`](./nq/chat_compare_qwen3_qlora.py): interactive base-vs-adapter QA compare chat
+- [`train_qwen3_qlora_openr1_math.py`](./train_qwen3_qlora_openr1_math.py): reasoning-style QLoRA training on OpenR1-Math-220k
+- [`chat_openr1_compare.py`](./chat_openr1_compare.py): interactive base-vs-adapter reasoning compare chat
+- [`chat_linear_algebra_skill.py`](./chat_linear_algebra_skill.py): interactive chat with automatic linear algebra skill injection
+- [`skills/linear-algebra-solver/`](./skills/linear-algebra-solver): local skill prompt, references, and verification helper
+- [`pyproject.toml`](./pyproject.toml): package metadata and console script definitions
 
-## UV Quickstart
-### Install uv
-Recommended (with pipx):
-```bash
-pip install pipx
-pipx ensurepath
-pipx install uv
-```
+## Environment Setup
+This project targets Python 3.10+ and uses `uv` for environment management.
 
-Directly with pip:
-```bash
-pip install uv
-```
-
-Using brew (macOS/Linux):
-```bash
-brew install uv
-```
-
-### Create virtual environment
-```bash
-uv venv
-```
-or specify Python version:
 ```bash
 uv venv -p 3.10
 ```
 
-### Activate virtual environment
+Activate the environment:
+
 macOS/Linux:
 ```bash
 source .venv/bin/activate
 ```
 
-Windows (Command Prompt):
-```bash
-.venv\Scripts\activate.bat
-```
-
-Windows (PowerShell):
-```bash
+Windows PowerShell:
+```powershell
 .venv\Scripts\Activate.ps1
 ```
 
-Exit environment:
+Install the project in editable mode:
+
 ```bash
-deactivate
+uv pip install -e .
 ```
 
-Delete virtual environment:
-```bash
-rm -rf .venv
+Core dependencies are defined in [`pyproject.toml`](./pyproject.toml), including `torch`, `transformers`, `datasets`, `peft`, `accelerate`, `bitsandbytes`, and `tensorboard`.
+
+If you want to run the MiniMax judge evaluation script, create a local `.env` file in the repository root:
+
+```dotenv
+DASHSCOPE_API_KEY=your_api_key_here
 ```
 
-### Install packages with uv pip
-From requirements file:
+The script `eval_compare_with_minimax.py` will load this file automatically.
+
+## Quick Start
+Trainer-based QA fine-tuning:
+
 ```bash
-uv pip install -r requirements.txt
+python nq/train_qwen3_qlora_nq.py
 ```
 
-Install individual packages:
-```bash
-uv pip install requests beautifulsoup4
-```
+Reasoning-style math fine-tuning:
 
-With extras:
-```bash
-uv pip install "celery[redis]"
-```
-
-From Git repository:
-```bash
-uv pip install "git+https://github.com/example/my-lib.git#egg=my-lib"
-```
-
-Local editable install:
-```bash
-uv pip install "-e ."
-```
-
-### Run project
-After `.venv` is activated, use:
-```bash
-python app.py
-```
-Key point: use `python` in the activated environment. Do not use `uv python`.
-
-## Training
-Trainer-based:
-```bash
-python train_qwen3_qlora_nq.py
-```
-
-OpenR1-Math-220k (reasoning data):
 ```bash
 python train_qwen3_qlora_openr1_math.py
 ```
-This training target uses `Reasoning:` + `Answer:` format, so outputs are more likely to include reasoning steps.
 
-Manual loop (single GPU):
+Linear algebra skill chat:
+
 ```bash
-python train_qwen3_qlora_manual.py
+python chat_linear_algebra_skill.py --load_in_4bit
 ```
 
-Resume from checkpoint:
+## Training Workflows
+### 1. TriviaQA-style QA with `Trainer`
+Default settings:
+
+- model: `Qwen/Qwen3-4B`
+- dataset: `mandarjoshi/trivia_qa`
+- config: `rc.nocontext`
+- output: `./outputs/qwen3-4b-qlora-nq`
+
+Run:
+
 ```bash
-python train_qwen3_qlora_nq.py --auto_resume
-python train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-nq/checkpoint-200
+python nq/train_qwen3_qlora_nq.py
 ```
 
-## TensorBoard
-Enable logging during training:
+Resume:
+
 ```bash
-python train_qwen3_qlora_nq.py --use_tensorboard
+python nq/train_qwen3_qlora_nq.py --auto_resume
+python nq/train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-nq/checkpoint-200
 ```
 
-Launch TensorBoard:
+Enable TensorBoard logging:
+
 ```bash
+python nq/train_qwen3_qlora_nq.py --use_tensorboard
 tensorboard --logdir ./outputs/qwen3-4b-qlora-nq/runs --port 6006
 ```
 
-Manual-loop TensorBoard logdir:
+### 2. TriviaQA-style QA with a manual loop
+This variant keeps the training loop explicit and saves optimizer/scheduler state in each checkpoint.
+
 ```bash
-./outputs/qwen3-4b-qlora-manual/runs
+python nq/train_qwen3_qlora_manual.py --use_tensorboard
 ```
 
-## Evaluation (Base vs Finetuned)
+Resume from a saved checkpoint:
+
 ```bash
-python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-nq \
-  --dataset_name mandarjoshi/trivia_qa \
-  --dataset_config rc.nocontext \
-  --eval_split validation \
-  --max_eval_samples 20 \
-  --output_file ./outputs/eval_compare_results.json
+python nq/train_qwen3_qlora_manual.py --resume_checkpoint ./outputs/qwen3-4b-qlora-manual/checkpoint-200
 ```
 
-Low-VRAM mode:
+### 3. OpenR1 reasoning fine-tuning
+Default settings:
+
+- dataset: `oieieio/OpenR1-Math-220k`
+- train split: `default`
+- eval split: `extended`
+- output: `./outputs/qwen3-4b-qlora-openr1-math`
+
+Run:
+
 ```bash
-python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-nq \
-  --load_in_4bit
+python train_qwen3_qlora_openr1_math.py
 ```
 
-LLM-as-a-judge:
+With early stopping:
+
 ```bash
-python eval_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-nq \
-  --judge_model_name Qwen/Qwen3-4B \
-  --max_eval_samples 20 \
-  --output_file ./outputs/eval_compare_with_judge.json
+python train_qwen3_qlora_openr1_math.py --use_early_stopping
 ```
 
-## Interactive Compare Chat
+Resume:
+
 ```bash
-python chat_compare_qwen3_qlora.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-nq
+python train_qwen3_qlora_openr1_math.py --auto_resume
+python train_qwen3_qlora_openr1_math.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-openr1-math/checkpoint-200
 ```
 
-Type `exit` or `quit` to stop.
+## Interactive Chat Tools
+### QA compare chat
+Compare the base model against a fine-tuned QA adapter:
 
-OpenR1 reasoning compare chat:
 ```bash
-python chat_openr1_compare.py \
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math
+python nq/chat_compare_qwen3_qlora.py --adapter_path ./outputs/qwen3-4b-qlora-nq --load_in_4bit
 ```
 
-## Core QLoRA Design
-1. Load base model: `Qwen/Qwen3-4B`
-2. Apply 4-bit quantization (`nf4`, double quant)
-3. Insert LoRA adapters on attention/MLP projections
-4. Build QA pairs from TriviaQA fields
-5. Supervised format:
-   `Question: ...`
-   `Answer: ...`
-6. Mask prompt labels with `-100`, optimize answer tokens only
+### OpenR1 reasoning compare chat
+Compare the base model against a reasoning adapter:
+
+```bash
+python chat_openr1_compare.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --load_in_4bit
+```
+
+### Linear algebra skill chat
+Use the local skill bundle automatically for linear algebra questions:
+
+```bash
+python chat_linear_algebra_skill.py --load_in_4bit
+```
+
+Force skill injection for every query:
+
+```bash
+python chat_linear_algebra_skill.py --load_in_4bit --always_use_skill
+```
+
+Load a LoRA adapter on top of the base model:
+
+```bash
+python chat_linear_algebra_skill.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --load_in_4bit
+```
+
+## Data Formatting
+### TriviaQA-style QA
+The QA scripts convert dataset rows into:
+
+```text
+Question: ...
+Answer: ...
+```
+
+Prompt tokens are masked with `-100`, so loss is applied only to the answer portion.
+
+### OpenR1 reasoning
+The reasoning script builds prompts like:
+
+```text
+Question: ...
+Please reason step by step, then provide the final answer.
+
+Reasoning:
+...
+
+Answer:
+...
+```
+
+If a dataset row has only reasoning or only a final answer, the script still keeps the valid target.
+
+## Notes
+- Current training and chat scripts assume access to Hugging Face model and dataset downloads.
+- Most workflows are designed for CUDA GPUs; 4-bit loading is supported through `bitsandbytes`.
+- `pyproject.toml` still defines some console scripts as top-level modules even though the QA scripts live under `nq/`. The README commands above use direct file paths because they match the repository layout.
