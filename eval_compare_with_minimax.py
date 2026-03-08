@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,6 +61,18 @@ def parse_args() -> argparse.Namespace:
         help="How to normalize dataset rows into question/reference pairs.",
     )
     parser.add_argument("--max_samples", type=int, default=30)
+    parser.add_argument(
+        "--levels",
+        type=str,
+        default="",
+        help="Comma-separated competition_math levels to keep, e.g. 'Level 1,Level 3,Level 5'.",
+    )
+    parser.add_argument(
+        "--samples_per_level",
+        type=int,
+        default=0,
+        help="If > 0, sample up to this many examples per level after optional level filtering.",
+    )
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_p", type=float, default=0.9)
@@ -254,6 +267,7 @@ def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, st
             "question": question,
             "reference_reasoning": reasoning,
             "reference_answer": answer,
+            "level": "",
         }
 
     if dataset_format == "competition_math":
@@ -263,6 +277,7 @@ def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, st
             "question": question,
             "reference_reasoning": solution,
             "reference_answer": extract_boxed_answer(solution),
+            "level": str(row.get("level", "")).strip(),
         }
 
     if dataset_format == "svamp":
@@ -273,6 +288,7 @@ def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, st
             "question": question,
             "reference_reasoning": "",
             "reference_answer": normalize_final_answer(str(row.get("Answer", "")).strip()),
+            "level": "",
         }
 
     if dataset_format in {"commonsense_qa", "arc"}:
@@ -291,9 +307,37 @@ def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, st
             "question": question,
             "reference_reasoning": "",
             "reference_answer": answer_text,
+            "level": "",
         }
 
     raise ValueError(f"Unsupported dataset_format: {dataset_format}")
+
+
+def parse_level_filter(levels: str) -> List[str]:
+    return [level.strip() for level in levels.split(",") if level.strip()]
+
+
+def stratified_sample_by_level(
+    rows: List[Dict[str, str]],
+    samples_per_level: int,
+    seed: int,
+) -> List[Dict[str, str]]:
+    grouped: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        grouped[row.get("level", "") or "[unknown]"].append(row)
+
+    rng = random.Random(seed)
+    sampled_rows: List[Dict[str, str]] = []
+    ordered_levels = sorted(grouped.keys())
+    for level in ordered_levels:
+        bucket = grouped[level]
+        if len(bucket) <= samples_per_level:
+            sampled_rows.extend(bucket)
+            continue
+        indices = list(range(len(bucket)))
+        rng.shuffle(indices)
+        sampled_rows.extend(bucket[i] for i in sorted(indices[:samples_per_level]))
+    return sampled_rows
 
 
 def build_eval_dataset(args: argparse.Namespace) -> Dataset:
@@ -320,22 +364,39 @@ def build_eval_dataset(args: argparse.Namespace) -> Dataset:
         args.dataset_split = fallback_split
         dataset = dataset_dict[fallback_split]
 
-    if args.max_samples > 0:
-        dataset = dataset.select(range(min(args.max_samples, len(dataset))))
     dataset_format = args.dataset_format
     if dataset_format == "auto":
         dataset_format = detect_dataset_format(args.dataset_name, dataset.column_names)
 
     normalized_rows = []
+    allowed_levels = set(parse_level_filter(args.levels))
     for idx, row in enumerate(dataset):
         sample = normalize_eval_row(row, dataset_format)
         if not sample["question"] or not sample["reference_answer"]:
             print(f"[skip] sample {idx}: missing normalized question or reference answer")
             continue
+        if allowed_levels and sample.get("level", "") not in allowed_levels:
+            continue
         normalized_rows.append(sample)
 
     if not normalized_rows:
         raise ValueError("No valid evaluation samples found after dataset normalization.")
+
+    if args.samples_per_level > 0:
+        normalized_rows = stratified_sample_by_level(normalized_rows, args.samples_per_level, args.seed)
+    elif args.max_samples > 0:
+        normalized_rows = normalized_rows[: min(args.max_samples, len(normalized_rows))]
+
+    if args.max_samples > 0 and args.samples_per_level > 0:
+        normalized_rows = normalized_rows[: min(args.max_samples, len(normalized_rows))]
+
+    if args.samples_per_level > 0:
+        level_counts: Dict[str, int] = defaultdict(int)
+        for row in normalized_rows:
+            level_counts[row.get("level", "") or "[unknown]"] += 1
+        counts_text = ", ".join(f"{level}={count}" for level, count in sorted(level_counts.items()))
+        print(f"[info] stratified sample by level: {counts_text}")
+
     return Dataset.from_list(normalized_rows)
 
 
@@ -638,6 +699,8 @@ def write_output_snapshot(args: argparse.Namespace, results: List[Dict[str, Any]
             "dataset_split": args.dataset_split,
             "dataset_format": args.dataset_format,
             "max_samples": args.max_samples,
+            "levels": parse_level_filter(args.levels),
+            "samples_per_level": args.samples_per_level,
             "prompt_style": args.prompt_style,
             "weights": DIMENSION_WEIGHTS,
             "threads": args.threads,
@@ -735,6 +798,7 @@ def main() -> None:
                 question = str(row["question"]).strip()
                 reference_reasoning = str(row.get("reference_reasoning", "")).strip()
                 reference_answer = str(row.get("reference_answer", "")).strip()
+                level = str(row.get("level", "")).strip()
 
                 print(f"[{idx + 1}/{total_samples}] Generating base answer...")
                 base_answer = generate_answer(
@@ -761,6 +825,7 @@ def main() -> None:
                     "question": question,
                     "reference_reasoning": reference_reasoning,
                     "reference_answer": reference_answer,
+                    "level": level,
                     "base_answer": base_answer,
                     "finetuned_answer": finetuned_answer,
                 }

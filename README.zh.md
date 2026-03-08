@@ -180,16 +180,28 @@ python chat_linear_algebra_skill.py --adapter_path ./outputs/qwen3-4b-qlora-open
 默认参数：
 
 - base model: `Qwen/Qwen3-4B`
-- judge model: `MiniMax-M2.5`
-- dataset: `gsm8k`
-- config: `main`
-- split: `test`
+- judge model: `qwen3.5-plus`
+- dataset: `qwedsacf/competition_math`
+- config: `default`
+- split: `train`
 - prompt style: `reasoning`
+- judge weighting: 明显偏向 final answer
 
 最小示例：
 
 ```bash
-python eval_compare_with_minimax.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --judge_api_key YOUR_API_KEY --load_in_4bit
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name qwedsacf/competition_math ^
+  --dataset_config default ^
+  --dataset_split train ^
+  --dataset_format competition_math ^
+  --prompt_style reasoning ^
+  --max_samples 30 ^
+  --load_in_4bit ^
+  --threads 4 ^
+  --resume
 ```
 
 适合 QA LoRA 的示例：
@@ -253,12 +265,32 @@ python eval_compare_with_minimax.py ^
   --judge_api_key YOUR_API_KEY ^
   --dataset_name qwedsacf/competition_math ^
   --dataset_config default ^
-  --dataset_split test ^
+  --dataset_split train ^
   --dataset_format competition_math ^
   --prompt_style reasoning ^
   --max_samples 30 ^
   --load_in_4bit ^
+  --threads 4 ^
+  --resume ^
   --output_file ./outputs/eval_compare_with_minimax_competition_math.json
+```
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name qwedsacf/competition_math ^
+  --dataset_config default ^
+  --dataset_split train ^
+  --dataset_format competition_math ^
+  --levels "Level 1,Level 2,Level 3,Level 4,Level 5" ^
+  --samples_per_level 6 ^
+  --max_samples 30 ^
+  --prompt_style reasoning ^
+  --load_in_4bit ^
+  --threads 4 ^
+  --resume ^
+  --output_file ./outputs/eval_compare_with_minimax_competition_math_balanced.json
 ```
 
 SVAMP：
@@ -340,4 +372,5 @@ Answer:
 - 当前训练和聊天脚本默认需要能访问 Hugging Face 模型与数据集下载。
 - 大部分流程默认面向 CUDA GPU；4-bit 加载通过 `bitsandbytes` 支持。
 - `eval_compare_with_minimax.py` 需要显式传入 `--judge_api_key`，因为判分通过 DashScope 兼容接口调用 MiniMax。
+- `eval_compare_with_minimax.py` 现在支持 `--threads`、`--resume` 和增量日志；运行时会持续写出 `<output_file>`、`<output_file>.jsonl`、`<output_file>.answers.jsonl`，中断后可直接续跑。
 - `pyproject.toml` 里部分 console script 还是按顶层模块声明，但 QA 脚本实际位于 `nq/` 目录下，所以文档统一使用文件路径命令，以匹配当前仓库布局。

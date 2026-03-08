@@ -180,16 +180,28 @@ Use [`eval_compare_with_minimax.py`](./eval_compare_with_minimax.py) to compare 
 Default behavior:
 
 - base model: `Qwen/Qwen3-4B`
-- judge model: `MiniMax-M2.5`
-- dataset: `gsm8k`
-- config: `main`
-- split: `test`
+- judge model: `qwen3.5-plus`
+- dataset: `qwedsacf/competition_math`
+- config: `default`
+- split: `train`
 - prompt style: `reasoning`
+- judge weighting: strongly prioritizes the final answer
 
 Minimal example:
 
 ```bash
-python eval_compare_with_minimax.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --judge_api_key YOUR_API_KEY --load_in_4bit
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name qwedsacf/competition_math ^
+  --dataset_config default ^
+  --dataset_split train ^
+  --dataset_format competition_math ^
+  --prompt_style reasoning ^
+  --max_samples 30 ^
+  --load_in_4bit ^
+  --threads 4 ^
+  --resume
 ```
 
 Recommended QA-style example:
@@ -216,9 +228,22 @@ Key arguments:
 - `--dataset_format`: one of `auto`, `gsm8k`, `competition_math`, `svamp`, `commonsense_qa`, `arc`
 - `--prompt_style`: `reasoning` for math/reasoning adapters, `qa` for direct-answer QA adapters
 - `--max_samples`: cap evaluation size to control runtime and API cost
+- `--levels`: comma-separated `competition_math` levels to keep, for example `Level 1,Level 3,Level 5`
+- `--samples_per_level`: sample up to this many examples per level after optional level filtering
+- `--threads`: number of concurrent judge workers; generation still runs sequentially on the local model
+- `--resume`: resume from existing output and log files, skipping finished samples
 - `--output_file`: JSON file containing per-sample judge scores and the aggregate summary
+- `--log_file`: optional JSONL path for incremental per-sample judge results; defaults to `<output_file>.jsonl`
 
 The script normalizes supported datasets into a common schema before generation and judging. `--dataset_format auto` works for the built-in formats below.
+For `qwedsacf/competition_math`, the dataset only provides a `train` split; if you request a missing split, the script automatically falls back to the only available split.
+For `competition_math`, the script can also stratify by `level`, which is useful for building a balanced evaluation set across `Level 1` to `Level 5`.
+The judge prompt is configured to heavily weight the extracted final answer over reasoning quality.
+During long runs, the script writes:
+
+- `<output_file>`: full aggregate snapshot after each completed sample
+- `<output_file>.jsonl`: append-only incremental judge log
+- `<output_file>.answers.jsonl`: cached generated base/finetuned answers for resume support
 
 ### Additional Evaluation Datasets
 Besides `gsm8k`, the evaluation script now supports these datasets directly:
@@ -253,12 +278,34 @@ python eval_compare_with_minimax.py ^
   --judge_api_key YOUR_API_KEY ^
   --dataset_name qwedsacf/competition_math ^
   --dataset_config default ^
-  --dataset_split test ^
+  --dataset_split train ^
   --dataset_format competition_math ^
   --prompt_style reasoning ^
   --max_samples 30 ^
   --load_in_4bit ^
+  --threads 4 ^
+  --resume ^
   --output_file ./outputs/eval_compare_with_minimax_competition_math.json
+```
+
+Balanced level-based sample:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name qwedsacf/competition_math ^
+  --dataset_config default ^
+  --dataset_split train ^
+  --dataset_format competition_math ^
+  --levels "Level 1,Level 2,Level 3,Level 4,Level 5" ^
+  --samples_per_level 6 ^
+  --max_samples 30 ^
+  --prompt_style reasoning ^
+  --load_in_4bit ^
+  --threads 4 ^
+  --resume ^
+  --output_file ./outputs/eval_compare_with_minimax_competition_math_balanced.json
 ```
 
 SVAMP:
@@ -340,4 +387,5 @@ If a dataset row has only reasoning or only a final answer, the script still kee
 - Current training and chat scripts assume access to Hugging Face model and dataset downloads.
 - Most workflows are designed for CUDA GPUs; 4-bit loading is supported through `bitsandbytes`.
 - `eval_compare_with_minimax.py` requires `--judge_api_key` because judge scoring is done through the DashScope-compatible MiniMax endpoint.
+- `eval_compare_with_minimax.py` now checkpoints progress continuously, so interrupted runs can resume without regenerating finished samples.
 - `pyproject.toml` still defines some console scripts as top-level modules even though the QA scripts live under `nq/`. The README commands above use direct file paths because they match the repository layout.
