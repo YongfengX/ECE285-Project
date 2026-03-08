@@ -46,14 +46,6 @@ uv pip install -e .
 
 Core dependencies are defined in [`pyproject.toml`](./pyproject.toml), including `torch`, `transformers`, `datasets`, `peft`, `accelerate`, `bitsandbytes`, and `tensorboard`.
 
-If you want to run the MiniMax judge evaluation script, create a local `.env` file in the repository root:
-
-```dotenv
-DASHSCOPE_API_KEY=your_api_key_here
-```
-
-The script `eval_compare_with_minimax.py` will load this file automatically.
-
 ## Quick Start
 Trainer-based QA fine-tuning:
 
@@ -71,6 +63,12 @@ Linear algebra skill chat:
 
 ```bash
 python chat_linear_algebra_skill.py --load_in_4bit
+```
+
+MiniMax judge evaluation:
+
+```bash
+python eval_compare_with_minimax.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --judge_api_key YOUR_API_KEY --load_in_4bit
 ```
 
 ## Training Workflows
@@ -176,6 +174,141 @@ Load a LoRA adapter on top of the base model:
 python chat_linear_algebra_skill.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --load_in_4bit
 ```
 
+## MiniMax Judge Evaluation
+Use [`eval_compare_with_minimax.py`](./eval_compare_with_minimax.py) to compare the base model against a LoRA adapter and let MiniMax score both answers.
+
+Default behavior:
+
+- base model: `Qwen/Qwen3-4B`
+- judge model: `MiniMax-M2.5`
+- dataset: `gsm8k`
+- config: `main`
+- split: `test`
+- prompt style: `reasoning`
+
+Minimal example:
+
+```bash
+python eval_compare_with_minimax.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --judge_api_key YOUR_API_KEY --load_in_4bit
+```
+
+Recommended QA-style example:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name tau/commonsense_qa ^
+  --dataset_config default ^
+  --dataset_split validation ^
+  --dataset_format commonsense_qa ^
+  --prompt_style qa ^
+  --max_samples 50 ^
+  --load_in_4bit ^
+  --output_file ./outputs/eval_compare_with_minimax_commonsense_qa.json
+```
+
+Key arguments:
+
+- `--adapter_path`: required; path to the LoRA adapter being evaluated
+- `--judge_api_key`: required; API key for the DashScope-compatible MiniMax endpoint
+- `--dataset_name`, `--dataset_config`, `--dataset_split`: Hugging Face dataset selection
+- `--dataset_format`: one of `auto`, `gsm8k`, `competition_math`, `svamp`, `commonsense_qa`, `arc`
+- `--prompt_style`: `reasoning` for math/reasoning adapters, `qa` for direct-answer QA adapters
+- `--max_samples`: cap evaluation size to control runtime and API cost
+- `--output_file`: JSON file containing per-sample judge scores and the aggregate summary
+
+The script normalizes supported datasets into a common schema before generation and judging. `--dataset_format auto` works for the built-in formats below.
+
+### Additional Evaluation Datasets
+Besides `gsm8k`, the evaluation script now supports these datasets directly:
+
+- `hendrycks/competition_math`
+- `ChilleD/SVAMP`
+- `tau/commonsense_qa`
+- `allenai/ai2_arc`
+
+Examples:
+
+GSM8K:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name gsm8k ^
+  --dataset_config main ^
+  --dataset_split test ^
+  --dataset_format gsm8k ^
+  --prompt_style reasoning ^
+  --max_samples 30 ^
+  --load_in_4bit
+```
+
+Competition Math:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name hendrycks/competition_math ^
+  --dataset_config default ^
+  --dataset_split test ^
+  --dataset_format competition_math ^
+  --prompt_style reasoning ^
+  --max_samples 30 ^
+  --load_in_4bit ^
+  --output_file ./outputs/eval_compare_with_minimax_competition_math.json
+```
+
+SVAMP:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name ChilleD/SVAMP ^
+  --dataset_config default ^
+  --dataset_split test ^
+  --dataset_format svamp ^
+  --prompt_style reasoning ^
+  --max_samples 30 ^
+  --load_in_4bit ^
+  --output_file ./outputs/eval_compare_with_minimax_svamp.json
+```
+
+CommonsenseQA:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name tau/commonsense_qa ^
+  --dataset_config default ^
+  --dataset_split validation ^
+  --dataset_format commonsense_qa ^
+  --prompt_style qa ^
+  --max_samples 50 ^
+  --load_in_4bit ^
+  --output_file ./outputs/eval_compare_with_minimax_commonsense_qa.json
+```
+
+AI2 ARC:
+
+```bash
+python eval_compare_with_minimax.py ^
+  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
+  --judge_api_key YOUR_API_KEY ^
+  --dataset_name allenai/ai2_arc ^
+  --dataset_config ARC-Challenge ^
+  --dataset_split validation ^
+  --dataset_format arc ^
+  --prompt_style qa ^
+  --max_samples 50 ^
+  --load_in_4bit ^
+  --output_file ./outputs/eval_compare_with_minimax_arc_challenge.json
+```
+
 ## Data Formatting
 ### TriviaQA-style QA
 The QA scripts convert dataset rows into:
@@ -206,4 +339,5 @@ If a dataset row has only reasoning or only a final answer, the script still kee
 ## Notes
 - Current training and chat scripts assume access to Hugging Face model and dataset downloads.
 - Most workflows are designed for CUDA GPUs; 4-bit loading is supported through `bitsandbytes`.
+- `eval_compare_with_minimax.py` requires `--judge_api_key` because judge scoring is done through the DashScope-compatible MiniMax endpoint.
 - `pyproject.toml` still defines some console scripts as top-level modules even though the QA scripts live under `nq/`. The README commands above use direct file paths because they match the repository layout.

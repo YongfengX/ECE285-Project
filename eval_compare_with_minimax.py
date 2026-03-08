@@ -9,13 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from datasets import Dataset, load_dataset
-from dotenv import load_dotenv
 from openai import OpenAI
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-
-
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 
 DIMENSION_WEIGHTS = {
@@ -40,9 +36,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, required=True, help="Path to your LoRA adapter directory")
     parser.add_argument("--judge_model_name", type=str, default="MiniMax-M2.5")
+    parser.add_argument(
+        "--judge_api_key",
+        type=str,
+        required=True,
+        help="API key for the DashScope-compatible MiniMax endpoint.",
+    )
     parser.add_argument("--dataset_name", type=str, default="gsm8k")
     parser.add_argument("--dataset_config", type=str, default="main")
     parser.add_argument("--dataset_split", type=str, default="test")
+    parser.add_argument(
+        "--dataset_format",
+        type=str,
+        default="auto",
+        choices=[
+            "auto",
+            "gsm8k",
+            "competition_math",
+            "svamp",
+            "commonsense_qa",
+            "arc",
+        ],
+        help="How to normalize dataset rows into question/reference pairs.",
+    )
     parser.add_argument("--max_samples", type=int, default=30)
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -165,6 +181,13 @@ def extract_gsm8k_reference(answer: str) -> Tuple[str, str]:
     return answer.strip(), normalize_final_answer(answer)
 
 
+def extract_boxed_answer(text: str) -> str:
+    matches = re.findall(r"\\boxed\{([^{}]+)\}", text)
+    if matches:
+        return normalize_final_answer(matches[-1])
+    return normalize_final_answer(text)
+
+
 def normalize_final_answer(text: str) -> str:
     text = text.strip()
     text = text.replace(",", "")
@@ -174,17 +197,102 @@ def normalize_final_answer(text: str) -> str:
     return text
 
 
+def format_multiple_choice_question(stem: str, labels: List[str], texts: List[str]) -> str:
+    options = [f"{label}. {text}" for label, text in zip(labels, texts)]
+    return f"{stem}\nChoices:\n" + "\n".join(options)
+
+
+def detect_dataset_format(dataset_name: str, column_names: List[str]) -> str:
+    lowered = dataset_name.lower()
+    cols = set(column_names)
+    if lowered == "gsm8k" or {"question", "answer"}.issubset(cols):
+        return "gsm8k"
+    if lowered == "hendrycks/competition_math" or {"problem", "solution"}.issubset(cols):
+        return "competition_math"
+    if lowered == "chilled/svamp" or {"Body", "Question", "Answer"}.issubset(cols):
+        return "svamp"
+    if lowered == "tau/commonsense_qa" or {"question", "choices", "answerKey"}.issubset(cols):
+        return "commonsense_qa"
+    if lowered == "allenai/ai2_arc" or {"question", "choices", "answerKey"}.issubset(cols):
+        return "arc"
+    raise ValueError(
+        f"Could not auto-detect dataset format for {dataset_name!r} with columns {sorted(column_names)}. "
+        "Pass --dataset_format explicitly."
+    )
+
+
+def normalize_eval_row(row: Dict[str, Any], dataset_format: str) -> Dict[str, str]:
+    if dataset_format == "gsm8k":
+        question = str(row.get("question", "")).strip()
+        reasoning, answer = extract_gsm8k_reference(str(row.get("answer", "")).strip())
+        return {
+            "question": question,
+            "reference_reasoning": reasoning,
+            "reference_answer": answer,
+        }
+
+    if dataset_format == "competition_math":
+        question = str(row.get("problem", "")).strip()
+        solution = str(row.get("solution", "")).strip()
+        return {
+            "question": question,
+            "reference_reasoning": solution,
+            "reference_answer": extract_boxed_answer(solution),
+        }
+
+    if dataset_format == "svamp":
+        body = str(row.get("Body", "")).strip()
+        question_text = str(row.get("Question", "")).strip()
+        question = " ".join(part for part in [body, question_text] if part).strip()
+        return {
+            "question": question,
+            "reference_reasoning": "",
+            "reference_answer": normalize_final_answer(str(row.get("Answer", "")).strip()),
+        }
+
+    if dataset_format in {"commonsense_qa", "arc"}:
+        question = str(row.get("question", "")).strip()
+        choices = row.get("choices") or {}
+        labels = [str(x).strip() for x in choices.get("label", [])]
+        texts = [str(x).strip() for x in choices.get("text", [])]
+        if labels and texts and len(labels) == len(texts):
+            question = format_multiple_choice_question(question, labels, texts)
+        answer_key = str(row.get("answerKey", "")).strip()
+        answer_text = answer_key
+        if answer_key and labels and texts:
+            label_to_text = {label: text for label, text in zip(labels, texts)}
+            answer_text = label_to_text.get(answer_key, answer_key)
+        return {
+            "question": question,
+            "reference_reasoning": "",
+            "reference_answer": answer_text,
+        }
+
+    raise ValueError(f"Unsupported dataset_format: {dataset_format}")
+
+
 def build_eval_dataset(args: argparse.Namespace) -> Dataset:
     dataset = load_dataset(args.dataset_name, args.dataset_config, split=args.dataset_split)
     if args.max_samples > 0:
         dataset = dataset.select(range(min(args.max_samples, len(dataset))))
-    return dataset
+    dataset_format = args.dataset_format
+    if dataset_format == "auto":
+        dataset_format = detect_dataset_format(args.dataset_name, dataset.column_names)
+
+    normalized_rows = []
+    for idx, row in enumerate(dataset):
+        sample = normalize_eval_row(row, dataset_format)
+        if not sample["question"] or not sample["reference_answer"]:
+            print(f"[skip] sample {idx}: missing normalized question or reference answer")
+            continue
+        normalized_rows.append(sample)
+
+    if not normalized_rows:
+        raise ValueError("No valid evaluation samples found after dataset normalization.")
+    return Dataset.from_list(normalized_rows)
 
 
-def make_judge_client() -> OpenAI:
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise EnvironmentError("DASHSCOPE_API_KEY is not set.")
+def make_judge_client(api_key: str) -> OpenAI:
     return OpenAI(
         api_key=api_key,
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -397,17 +505,13 @@ def main() -> None:
 
     print("Loading evaluation dataset...")
     dataset = build_eval_dataset(args)
-    client = make_judge_client()
+    client = make_judge_client(args.judge_api_key)
 
     results: List[Dict[str, Any]] = []
     for idx, row in enumerate(dataset):
-        question = str(row.get("question", "")).strip()
-        if not question:
-            print(f"[skip] sample {idx}: missing question field")
-            continue
-
-        raw_reference = str(row.get("answer", "")).strip()
-        reference_reasoning, reference_answer = extract_gsm8k_reference(raw_reference)
+        question = str(row["question"]).strip()
+        reference_reasoning = str(row.get("reference_reasoning", "")).strip()
+        reference_answer = str(row.get("reference_answer", "")).strip()
 
         print(f"[{idx + 1}/{len(dataset)}] Generating base answer...")
         base_answer = generate_answer(
@@ -467,6 +571,7 @@ def main() -> None:
             "dataset_name": args.dataset_name,
             "dataset_config": args.dataset_config,
             "dataset_split": args.dataset_split,
+            "dataset_format": args.dataset_format,
             "max_samples": args.max_samples,
             "prompt_style": args.prompt_style,
             "weights": DIMENSION_WEIGHTS,
