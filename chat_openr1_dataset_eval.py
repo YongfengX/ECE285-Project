@@ -172,6 +172,8 @@ def main() -> None:
             "reference_reasoning": reference_reasoning,
             "reference_answer": reference_answer,
             "level": level,
+            "base_raw_output": base_answer,
+            "finetuned_raw_output": finetuned_answer,
             "base_answer": base_answer,
             "finetuned_answer": finetuned_answer,
         }

@@ -38,11 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400/")
     parser.add_argument("--judge_model_name", type=str, default="qwen3.5-plus")
-    parser.add_argument(
-        "--judge_api_key",
-        type=str,
-        default="sk-345e0f458bdd4291826b54bac8099ad2",
-    )
+还是有问题啊你在这个对话栏里输出的
     parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
     parser.add_argument("--dataset_config", type=str, default="default")
     parser.add_argument("--dataset_split", type=str, default="train")
