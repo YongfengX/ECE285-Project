@@ -6,7 +6,13 @@ from typing import Dict, List
 
 import torch
 
-from eval_compare_with_minimax import ModelBundle, build_eval_dataset, load_base_and_adapter
+from eval_compare_with_minimax import (
+    ModelBundle,
+    aggregate_results,
+    build_eval_dataset,
+    judge_sample_task,
+    load_base_and_adapter,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400")
+    parser.add_argument("--judge_model_name", type=str, default="qwen3.5-plus")
+    parser.add_argument("--judge_api_key", type=str, required=True)
     parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
     parser.add_argument("--dataset_config", type=str, default="default")
     parser.add_argument("--dataset_split", type=str, default="train")
@@ -42,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--judge_retries", type=int, default=3)
     parser.add_argument(
         "--prompt_style",
         type=str,
@@ -98,10 +107,12 @@ def generate_answer(
 
 
 def write_results(output_file: str, args: argparse.Namespace, results: List[Dict]) -> None:
+    summary = aggregate_results(results) if results else {}
     payload = {
         "config": {
             "base_model_name": args.base_model_name,
             "adapter_path": args.adapter_path,
+            "judge_model_name": args.judge_model_name,
             "dataset_name": args.dataset_name,
             "dataset_config": args.dataset_config,
             "dataset_split": args.dataset_split,
@@ -115,7 +126,9 @@ def write_results(output_file: str, args: argparse.Namespace, results: List[Dict
             "prompt_style": args.prompt_style,
             "load_in_4bit": args.load_in_4bit,
             "seed": args.seed,
+            "judge_retries": args.judge_retries,
         },
+        "summary": summary,
         "sample_count": len(results),
         "samples": results,
     }
@@ -166,7 +179,7 @@ def main() -> None:
         print("[Finetuned Raw Output]")
         print(finetuned_answer)
 
-        sample = {
+        sample_payload = {
             "index": idx,
             "question": question,
             "reference_reasoning": reference_reasoning,
@@ -177,7 +190,11 @@ def main() -> None:
             "base_answer": base_answer,
             "finetuned_answer": finetuned_answer,
         }
-        results.append(sample)
+        print(f"[{idx + 1}/{total_samples}] Judging with {args.judge_model_name}...")
+        judged_sample = judge_sample_task(args, sample_payload)
+        judged_sample.pop("base_answer", None)
+        judged_sample.pop("finetuned_answer", None)
+        results.append(judged_sample)
         write_results(args.output_file, args, results)
 
     print(f"\nSaved results to: {args.output_file}")
