@@ -201,7 +201,8 @@ def generate_answer(
             pad_token_id=bundle.tokenizer.pad_token_id,
         )
     gen_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
-    return bundle.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    raw_text = bundle.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    return canonicalize_response(raw_text)
 
 
 def extract_gsm8k_reference(answer: str) -> Tuple[str, str]:
@@ -218,28 +219,50 @@ def extract_boxed_answer(text: str) -> str:
     return normalize_final_answer(text)
 
 
-def extract_final_answer_from_response(text: str) -> str:
+def split_response_sections(text: str) -> Tuple[str, str]:
     stripped = text.strip()
-    answer_match = re.search(r"Answer:\s*(.+)$", stripped, flags=re.IGNORECASE | re.DOTALL)
-    if answer_match:
-        stripped = answer_match.group(1).strip()
-    return extract_boxed_answer(stripped)
+    if not stripped:
+        return "", ""
+
+    marker_patterns = [
+        r"\*\*Final Answer\*\*\s*:\s*",
+        r"\*\*Answer\*\*\s*:\s*",
+        r"\bFinal Answer\s*:\s*",
+        r"\bAnswer\s*:\s*",
+    ]
+    earliest_match = None
+    for pattern in marker_patterns:
+        match = re.search(pattern, stripped, flags=re.IGNORECASE)
+        if match and (earliest_match is None or match.start() < earliest_match.start()):
+            earliest_match = match
+
+    if earliest_match is None:
+        return "", extract_boxed_answer(stripped)
+
+    reasoning = stripped[: earliest_match.start()].strip()
+    final_segment = stripped[earliest_match.end() :].strip()
+    final_answer = extract_boxed_answer(final_segment)
+    return reasoning, final_answer
+
+
+def canonicalize_response(text: str) -> str:
+    reasoning, final_answer = split_response_sections(text)
+    if reasoning and final_answer:
+        return f"Reasoning:\n{reasoning}\n\nAnswer:\n{final_answer}"
+    if final_answer:
+        return final_answer
+    return text.strip()
+
+
+def extract_final_answer_from_response(text: str) -> str:
+    _, final_answer = split_response_sections(text)
+    return final_answer
 
 
 def extract_reasoning_from_response(text: str) -> str:
-    stripped = text.strip()
-    reasoning_match = re.search(
-        r"Reasoning:\s*(.*?)\s*Answer:\s*",
-        stripped,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if reasoning_match:
-        return reasoning_match.group(1).strip()
-
-    answer_match = re.search(r"\s*Answer:\s*.+$", stripped, flags=re.IGNORECASE | re.DOTALL)
-    if answer_match:
-        stripped = stripped[: answer_match.start()].strip()
-    return stripped
+    reasoning, _ = split_response_sections(text)
+    reasoning = re.sub(r"^\s*Reasoning\s*:\s*", "", reasoning, flags=re.IGNORECASE).strip()
+    return reasoning
 
 
 def normalize_final_answer(text: str) -> str:

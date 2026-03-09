@@ -12,6 +12,7 @@ from eval_compare_with_minimax import (
     aggregate_results,
     append_log_record,
     build_eval_dataset,
+    canonicalize_response,
     judge_sample_task,
     load_answer_cache,
     load_base_and_adapter,
@@ -119,7 +120,8 @@ def generate_answer(
             pad_token_id=bundle.tokenizer.pad_token_id,
         )
     gen_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
-    return bundle.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    raw_text = bundle.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+    return canonicalize_response(raw_text)
 
 
 def main() -> None:
