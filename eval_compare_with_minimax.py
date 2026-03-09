@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="If > 0, sample up to this many examples per level after optional level filtering.",
     )
-    parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")
@@ -490,8 +490,8 @@ def build_judge_messages(
         "- clarity: readability, structure, and clarity\n"
         "- instruction_following: whether the response follows the requested format and task\n\n"
         "Weight the dimensions as:\n"
-        "- correctness: 0.70\n"
-        "- reasoning: 0.10\n"
+        "- correctness: 0.40\n"
+        "- reasoning: 0.40\n"
         "- completeness: 0.05\n"
         "- clarity: 0.05\n"
         "- instruction_following: 0.10\n\n"
