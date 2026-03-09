@@ -226,6 +226,22 @@ def extract_final_answer_from_response(text: str) -> str:
     return extract_boxed_answer(stripped)
 
 
+def extract_reasoning_from_response(text: str) -> str:
+    stripped = text.strip()
+    reasoning_match = re.search(
+        r"Reasoning:\s*(.*?)\s*Answer:\s*",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if reasoning_match:
+        return reasoning_match.group(1).strip()
+
+    answer_match = re.search(r"\s*Answer:\s*.+$", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if answer_match:
+        stripped = stripped[: answer_match.start()].strip()
+    return stripped
+
+
 def normalize_final_answer(text: str) -> str:
     text = text.strip()
     text = text.replace(",", "")
@@ -588,7 +604,9 @@ def judge_pair(
     return {
         "base_scores": base_scores,
         "finetuned_scores": finetuned_scores,
+        "base_reasoning": extract_reasoning_from_response(base_answer),
         "base_final_answer": extract_final_answer_from_response(base_answer),
+        "finetuned_reasoning": extract_reasoning_from_response(finetuned_answer),
         "finetuned_final_answer": extract_final_answer_from_response(finetuned_answer),
         "reference_final_answer": reference_answer,
         "winner": winner,
@@ -718,6 +736,14 @@ def judge_sample_task(
     args: argparse.Namespace,
     sample_payload: Dict[str, Any],
 ) -> Dict[str, Any]:
+    sample_payload = dict(sample_payload)
+    sample_payload.setdefault("base_reasoning", extract_reasoning_from_response(sample_payload["base_answer"]))
+    sample_payload.setdefault("base_final_answer", extract_final_answer_from_response(sample_payload["base_answer"]))
+    sample_payload.setdefault("finetuned_reasoning", extract_reasoning_from_response(sample_payload["finetuned_answer"]))
+    sample_payload.setdefault(
+        "finetuned_final_answer",
+        extract_final_answer_from_response(sample_payload["finetuned_answer"]),
+    )
     client = make_judge_client(args.judge_api_key)
     judge_result = judge_pair(
         client=client,
@@ -827,7 +853,11 @@ def main() -> None:
                     "reference_answer": reference_answer,
                     "level": level,
                     "base_answer": base_answer,
+                    "base_reasoning": extract_reasoning_from_response(base_answer),
+                    "base_final_answer": extract_final_answer_from_response(base_answer),
                     "finetuned_answer": finetuned_answer,
+                    "finetuned_reasoning": extract_reasoning_from_response(finetuned_answer),
+                    "finetuned_final_answer": extract_final_answer_from_response(finetuned_answer),
                 }
                 append_log_record(answer_cache_file, sample_payload)
                 cached_answers[idx] = sample_payload
