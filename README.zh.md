@@ -1,162 +1,126 @@
 # ECE285 项目
 [English](./README.md) | 中文
 
-这个仓库目前包含三条围绕 `Qwen/Qwen3-4B` 的工作流：
+这个仓库目前是一个围绕 `Qwen/Qwen3-4B` 的本地实验集合，主要包括 QLoRA 微调、LoRA 适配器对比、以及基于 prompt 的线性代数 skill 注入。
 
-- 在 [`nq/`](./nq) 下做 TriviaQA 风格问答的 QLoRA 微调
-- 在 `oieieio/OpenR1-Math-220k` 上做推理型数学回答的 QLoRA 微调
-- 通过本地线性代数 skill 自动注入提示词的交互式聊天
+下面的说明以当前目录里真实存在的文件为准。
 
-本文档只描述当前仓库里实际存在的脚本和命令。
+## 仓库目前包含什么
 
-## 仓库结构
+- `nq/` 下的 TriviaQA 风格问答 QLoRA 微调
+- 根目录下的 OpenR1 数学/推理 QLoRA 微调
+- 基础模型和 LoRA 适配器之间的交互式对比聊天
+- 使用外部 LLM judge 的数据集评测脚本
+- `skills/linear-algebra-solver` 下的本地线性代数 skill 包
+
+## 当前需要注意的点
+
+- 现在建议统一用 `python 脚本路径.py` 的方式运行。
+- [`pyproject.toml`](./pyproject.toml) 里的 console script 和模块路径还是旧布局，和当前目录结构不一致。
+- 仓库里已经提交了一个适配器 checkpoint，在 `output/qwen3-4b-qlora-openr1-math/checkpoint-2400`。
+- 训练脚本默认一般输出到 `./outputs/...`，所以当前项目里 `output/` 和 `outputs/` 两种路径都需要区分。
+
+## 目录说明
+
 - [`nq/train_qwen3_qlora_nq.py`](./nq/train_qwen3_qlora_nq.py)：基于 `Trainer` 的 TriviaQA 风格问答微调
-- [`nq/train_qwen3_qlora_manual.py`](./nq/train_qwen3_qlora_manual.py)：手写训练循环版本
-- [`nq/chat_compare_qwen3_qlora.py`](./nq/chat_compare_qwen3_qlora.py)：基础模型和 QA LoRA 的交互式对比
-- [`train_qwen3_qlora_openr1_math.py`](./train_qwen3_qlora_openr1_math.py)：OpenR1-Math-220k 推理型微调
-- [`chat_openr1_compare.py`](./chat_openr1_compare.py)：基础模型和推理 LoRA 的交互式对比
+- [`nq/train_qwen3_qlora_manual.py`](./nq/train_qwen3_qlora_manual.py)：手写单卡 QLoRA 训练循环
+- [`nq/chat_compare_qwen3_qlora.py`](./nq/chat_compare_qwen3_qlora.py)：问答场景下的 base vs adapter 交互对比
+- [`train_qwen3_qlora_openr1_math.py`](./train_qwen3_qlora_openr1_math.py)：在 `oieieio/OpenR1-Math-220k` 上做推理式微调
+- [`chatbot.py`](./chatbot.py)：基础模型和 OpenR1 适配器的推理对比聊天
 - [`chat_linear_algebra_skill.py`](./chat_linear_algebra_skill.py)：自动注入线性代数 skill 的聊天入口
-- [`eval_compare_with_minimax.py`](./eval_compare_with_minimax.py)：用 MiniMax 作为 LLM judge 评测基础模型和 LoRA
-- [`skills/linear-algebra-solver/`](./skills/linear-algebra-solver)：本地 skill 提示词、参考资料和校验脚本
-- [`pyproject.toml`](./pyproject.toml)：依赖和 console script 定义
+- [`eval_compare_with_minimax.py`](./eval_compare_with_minimax.py)：用 MiniMax 作为 judge，对 base 和两个 adapter 做对比评测
+- [`chat_openr1_dataset_eval.py`](./chat_openr1_dataset_eval.py)：数据集驱动的三路对比评测脚本
+- [`level5compare.py`](./level5compare.py)：针对 `competition_math` Level 5 的专项对比脚本
+- [`skills/linear-algebra-solver`](./skills/linear-algebra-solver)：skill 文本、参考资料和验证脚本
+- [`output/`](./output)：仓库中已存在的实验产物目录
 
 ## 环境准备
-项目要求 Python 3.10+，推荐使用 `uv` 管理环境。
+
+建议使用 Python `3.10+`。
+
+创建虚拟环境：
 
 ```bash
 uv venv -p 3.10
 ```
 
-激活环境：
-
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-Windows PowerShell:
+在 Windows PowerShell 中激活：
 
 ```powershell
 .venv\Scripts\Activate.ps1
 ```
 
-安装项目依赖：
+安装这些脚本实际依赖的核心包：
 
 ```bash
-uv pip install -e .
+uv pip install torch transformers datasets accelerate peft bitsandbytes sentencepiece tensorboard openai python-dotenv
 ```
 
-核心依赖见 [`pyproject.toml`](./pyproject.toml)，包括 `torch`、`transformers`、`datasets`、`peft`、`accelerate`、`bitsandbytes` 和 `tensorboard`。
+如果要运行 judge 相关评测脚本，先设置 [`.env.example`](./.env.example) 里对应的环境变量：
 
-## 快速开始
-TriviaQA 风格问答微调：
-
-```bash
-python nq/train_qwen3_qlora_nq.py
+```powershell
+$env:DASHSCOPE_API_KEY="your_api_key_here"
 ```
 
-OpenR1 数学推理微调：
+## 主要工作流
 
-```bash
-python train_qwen3_qlora_openr1_math.py
-```
+### 1. TriviaQA 问答微调
 
-线性代数 skill 聊天：
-
-```bash
-python chat_linear_algebra_skill.py --load_in_4bit
-```
-
-MiniMax 评测：
-
-```bash
-python eval_compare_with_minimax.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --judge_api_key YOUR_API_KEY --load_in_4bit
-```
-
-## 训练流程
-### 1. 基于 `Trainer` 的 TriviaQA 风格问答微调
-默认设置：
-
-- model: `Qwen/Qwen3-4B`
-- dataset: `mandarjoshi/trivia_qa`
-- config: `rc.nocontext`
-- output: `./outputs/qwen3-4b-qlora-nq`
-
-运行：
+`Trainer` 版本：
 
 ```bash
 python nq/train_qwen3_qlora_nq.py
 ```
 
-断点恢复：
-
-```bash
-python nq/train_qwen3_qlora_nq.py --auto_resume
-python nq/train_qwen3_qlora_nq.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-nq/checkpoint-200
-```
-
-开启 TensorBoard：
-
-```bash
-python nq/train_qwen3_qlora_nq.py --use_tensorboard
-tensorboard --logdir ./outputs/qwen3-4b-qlora-nq/runs --port 6006
-```
-
-### 2. 手写训练循环版 TriviaQA 微调
-这个版本保留了显式训练循环，并在 checkpoint 中保存 `optimizer` 和 `scheduler` 状态。
+手写训练循环版本：
 
 ```bash
 python nq/train_qwen3_qlora_manual.py --use_tensorboard
 ```
 
-从 checkpoint 恢复：
+这两条训练线的默认设置：
 
-```bash
-python nq/train_qwen3_qlora_manual.py --resume_checkpoint ./outputs/qwen3-4b-qlora-manual/checkpoint-200
-```
+- 基础模型：`Qwen/Qwen3-4B`
+- 数据集：`mandarjoshi/trivia_qa`
+- 配置：`rc.nocontext`
+- 训练格式：`Question: ...` 然后 `Answer: ...`
 
-### 3. OpenR1 推理型微调
-默认设置：
-
-- dataset: `oieieio/OpenR1-Math-220k`
-- train split: `default`
-- eval split: `extended`
-- output: `./outputs/qwen3-4b-qlora-openr1-math`
-
-运行：
+### 2. OpenR1 数学 / 推理微调
 
 ```bash
 python train_qwen3_qlora_openr1_math.py
 ```
 
-开启 early stopping：
+常用变体：
 
 ```bash
 python train_qwen3_qlora_openr1_math.py --use_early_stopping
-```
-
-断点恢复：
-
-```bash
 python train_qwen3_qlora_openr1_math.py --auto_resume
-python train_qwen3_qlora_openr1_math.py --resume_from_checkpoint ./outputs/qwen3-4b-qlora-openr1-math/checkpoint-200
 ```
 
-## 交互式工具
-### QA 对比聊天
+默认设置：
+
+- 基础模型：`Qwen/Qwen3-4B`
+- 数据集：`oieieio/OpenR1-Math-220k`
+- 训练 split：`default`
+- 验证 split：`extended`
+- 输出目录：`./outputs/qwen3-4b-qlora-openr1-math`
+
+### 3. 交互式聊天
+
+问答 adapter 和基础模型对比：
 
 ```bash
-python nq/chat_compare_qwen3_qlora.py --adapter_path ./outputs/qwen3-4b-qlora-nq --load_in_4bit
+python nq/chat_compare_qwen3_qlora.py --adapter_path .\outputs\qwen3-4b-qlora-nq\checkpoint-200 --load_in_4bit
 ```
 
-### OpenR1 推理对比聊天
+使用仓库里现成 checkpoint 的推理对比：
 
 ```bash
-python chat_openr1_compare.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --load_in_4bit
+python chatbot.py --adapter_path .\output\qwen3-4b-qlora-openr1-math\checkpoint-2400 --load_in_4bit
 ```
 
-### 线性代数 skill 聊天
+线性代数 skill 聊天：
 
 ```bash
 python chat_linear_algebra_skill.py --load_in_4bit
@@ -168,209 +132,60 @@ python chat_linear_algebra_skill.py --load_in_4bit
 python chat_linear_algebra_skill.py --load_in_4bit --always_use_skill
 ```
 
-在基础模型上叠加 LoRA：
+### 4. 数据集评测
+
+使用 MiniMax judge 的主评测脚本：
 
 ```bash
-python chat_linear_algebra_skill.py --adapter_path ./outputs/qwen3-4b-qlora-openr1-math --load_in_4bit
+python eval_compare_with_minimax.py --adapter_path .\output\qwen3-4b-qlora-openr1-math\checkpoint-2400 --judge_api_key YOUR_API_KEY --load_in_4bit
 ```
 
-## MiniMax 评测
-使用 [`eval_compare_with_minimax.py`](./eval_compare_with_minimax.py) 可以让基础模型和 LoRA 适配器在同一批数据上作答，再交给 MiniMax 打分。
+这个脚本会做的事情：
 
-默认参数：
+- 加载 base model
+- 加载 `adapter_path`
+- 加载 `adapter2_path`
+- 把支持的 Hugging Face 数据集统一成公共问答格式
+- 调用外部 judge 模型打分
 
-- base model: `Qwen/Qwen3-4B`
-- judge model: `qwen3.5-plus`
-- dataset: `qwedsacf/competition_math`
-- config: `default`
-- split: `train`
-- prompt style: `reasoning`
-- judge weighting: 明显偏向 final answer
+脚本内置支持的数据格式：
 
-最小示例：
+- `gsm8k`
+- `competition_math`
+- `svamp`
+- `commonsense_qa`
+- `arc`
 
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name qwedsacf/competition_math ^
-  --dataset_config default ^
-  --dataset_split train ^
-  --dataset_format competition_math ^
-  --prompt_style reasoning ^
-  --max_samples 30 ^
-  --load_in_4bit ^
-  --threads 4 ^
-  --resume
-```
+另外还有两个本地实验性质更强的评测脚本：
 
-适合 QA LoRA 的示例：
+- [`chat_openr1_dataset_eval.py`](./chat_openr1_dataset_eval.py)：更通用的三路数据集评测
+- [`level5compare.py`](./level5compare.py)：面向 `qwedsacf/competition_math` Level 5 的专项评测
 
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name tau/commonsense_qa ^
-  --dataset_config default ^
-  --dataset_split validation ^
-  --dataset_format commonsense_qa ^
-  --prompt_style qa ^
-  --max_samples 50 ^
-  --load_in_4bit ^
-  --output_file ./outputs/eval_compare_with_minimax_commonsense_qa.json
-```
+这两个脚本更偏实验脚本，运行前建议先检查默认参数。
 
-关键参数：
+## 线性代数 Skill 包
 
-- `--adapter_path`：必填，要评测的 LoRA 路径
-- `--judge_api_key`：必填，DashScope 兼容 MiniMax 接口的 API key
-- `--dataset_name`、`--dataset_config`、`--dataset_split`：Hugging Face 数据集选择
-- `--dataset_format`：支持 `auto`、`gsm8k`、`competition_math`、`svamp`、`commonsense_qa`、`arc`
-- `--prompt_style`：推理型模型用 `reasoning`，直接问答型模型用 `qa`
-- `--max_samples`：限制评测样本数，控制耗时和 API 成本
-- `--output_file`：输出 JSON，包含逐样本得分和整体汇总
+[`skills/linear-algebra-solver`](./skills/linear-algebra-solver) 里包含：
 
-脚本会先把支持的数据集统一归一化，再进行生成和评审。对下面这些内置数据集，`--dataset_format auto` 就能自动识别。
+- `SKILL.md`：主 skill 工作流
+- `references/methods.md`：按题型整理的方法说明
+- `references/checklist.md`：常见错误检查清单
+- `scripts/verify_linear_algebra.py`：符号验证辅助脚本
 
-### 新增可直接评测的数据集
-除了默认的 `gsm8k`，现在还支持：
+[`chat_linear_algebra_skill.py`](./chat_linear_algebra_skill.py) 会在问题像线性代数时自动加载这个 skill，或者通过 `--always_use_skill` 对所有问题强制注入。
 
-- `qwedsacf/competition_math`
-- `ChilleD/SVAMP`
-- `tau/commonsense_qa`
-- `allenai/ai2_arc`
+## 仓库中已有的产物
 
-示例命令如下。
+当前仓库里已经包含这个 checkpoint：
 
-GSM8K：
+- [`output/qwen3-4b-qlora-openr1-math/checkpoint-2400`](./output/qwen3-4b-qlora-openr1-math/checkpoint-2400)
 
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name gsm8k ^
-  --dataset_config main ^
-  --dataset_split test ^
-  --dataset_format gsm8k ^
-  --prompt_style reasoning ^
-  --max_samples 30 ^
-  --load_in_4bit
-```
+里面包含 adapter 权重、tokenizer 文件、优化器状态、调度器状态和训练元数据。
 
-Competition Math：
+## 已知不一致之处
 
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name qwedsacf/competition_math ^
-  --dataset_config default ^
-  --dataset_split train ^
-  --dataset_format competition_math ^
-  --prompt_style reasoning ^
-  --max_samples 30 ^
-  --load_in_4bit ^
-  --threads 4 ^
-  --resume ^
-  --output_file ./outputs/eval_compare_with_minimax_competition_math.json
-```
+- `pyproject.toml` 仍然描述的是旧的根目录模块布局。
+- 仓库里有 `output/`，而训练脚本默认写入的是 `outputs/`。
+- 部分评测脚本是为某次实验临时扩展的，默认参数假设比主训练脚本更强。
 
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name qwedsacf/competition_math ^
-  --dataset_config default ^
-  --dataset_split train ^
-  --dataset_format competition_math ^
-  --levels "Level 1,Level 2,Level 3,Level 4,Level 5" ^
-  --samples_per_level 6 ^
-  --max_samples 30 ^
-  --prompt_style reasoning ^
-  --load_in_4bit ^
-  --threads 4 ^
-  --resume ^
-  --output_file ./outputs/eval_compare_with_minimax_competition_math_balanced.json
-```
-
-SVAMP：
-
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-openr1-math ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name ChilleD/SVAMP ^
-  --dataset_config default ^
-  --dataset_split test ^
-  --dataset_format svamp ^
-  --prompt_style reasoning ^
-  --max_samples 30 ^
-  --load_in_4bit ^
-  --output_file ./outputs/eval_compare_with_minimax_svamp.json
-```
-
-CommonsenseQA：
-
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name tau/commonsense_qa ^
-  --dataset_config default ^
-  --dataset_split validation ^
-  --dataset_format commonsense_qa ^
-  --prompt_style qa ^
-  --max_samples 50 ^
-  --load_in_4bit ^
-  --output_file ./outputs/eval_compare_with_minimax_commonsense_qa.json
-```
-
-AI2 ARC：
-
-```bash
-python eval_compare_with_minimax.py ^
-  --adapter_path ./outputs/qwen3-4b-qlora-nq ^
-  --judge_api_key YOUR_API_KEY ^
-  --dataset_name allenai/ai2_arc ^
-  --dataset_config ARC-Challenge ^
-  --dataset_split validation ^
-  --dataset_format arc ^
-  --prompt_style qa ^
-  --max_samples 50 ^
-  --load_in_4bit ^
-  --output_file ./outputs/eval_compare_with_minimax_arc_challenge.json
-```
-
-## 数据格式
-### TriviaQA 风格问答
-QA 脚本会把数据整理成：
-
-```text
-Question: ...
-Answer: ...
-```
-
-提示词部分的 label 会被设成 `-100`，只在答案 token 上计算 loss。
-
-### OpenR1 推理格式
-推理脚本构造的文本格式是：
-
-```text
-Question: ...
-Please reason step by step, then provide the final answer.
-
-Reasoning:
-...
-
-Answer:
-...
-```
-
-如果一条数据只有 reasoning 或只有 final answer，脚本仍会保留可用目标。
-
-## 说明
-- 当前训练和聊天脚本默认需要能访问 Hugging Face 模型与数据集下载。
-- 大部分流程默认面向 CUDA GPU；4-bit 加载通过 `bitsandbytes` 支持。
-- `eval_compare_with_minimax.py` 需要显式传入 `--judge_api_key`，因为判分通过 DashScope 兼容接口调用 MiniMax。
-- `eval_compare_with_minimax.py` 现在支持 `--threads`、`--resume` 和增量日志；运行时会持续写出 `<output_file>`、`<output_file>.jsonl`、`<output_file>.answers.jsonl`，中断后可直接续跑。
-- `pyproject.toml` 里部分 console script 还是按顶层模块声明，但 QA 脚本实际位于 `nq/` 目录下，所以文档统一使用文件路径命令，以匹配当前仓库布局。
+如果你接下来还想把安装命令和 console scripts 也整理通，我建议下一步同步修正 [`pyproject.toml`](./pyproject.toml)。

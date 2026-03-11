@@ -33,11 +33,23 @@ class ModelBundle:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare a fine-tuned model against Qwen3-4B using MiniMax as an LLM judge."
+        description="Compare three models (base + adapter1 + adapter2) using MiniMax as an LLM judge."
     )
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400/")
+    parser.add_argument(
+        "--adapter2_path",
+        type=str,
+        default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400/",
+        help="Path to the second LoRA adapter model.",
+    )
     parser.add_argument("--judge_model_name", type=str, default="qwen3.5-plus")
+    parser.add_argument(
+        "--judge_api_key",
+        type=str,
+        default=os.getenv("DASHSCOPE_API_KEY", ""),
+        help="Judge API key. Defaults to DASHSCOPE_API_KEY env var.",
+    )
     parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
     parser.add_argument("--dataset_config", type=str, default="default")
     parser.add_argument("--dataset_split", type=str, default="train")
@@ -128,35 +140,64 @@ def load_tokenizer(model_name: str) -> AutoTokenizer:
     return tokenizer
 
 
-def load_base_and_adapter(args: argparse.Namespace) -> Tuple[ModelBundle, ModelBundle]:
+def _load_model_bundle(
+    model_name: str,
+    quant_config: Optional[BitsAndBytesConfig],
+    model_dtype: torch.dtype,
+    tokenizer: AutoTokenizer,
+) -> ModelBundle:
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=model_dtype,
+        quantization_config=quant_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    model.eval()
+    return ModelBundle(model=model, tokenizer=tokenizer)
+
+
+def _load_adapter_bundle(
+    base_model_name: str,
+    adapter_path: str,
+    quant_config: Optional[BitsAndBytesConfig],
+    model_dtype: torch.dtype,
+    tokenizer: AutoTokenizer,
+) -> ModelBundle:
+    adapter_base = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=model_dtype,
+        quantization_config=quant_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    adapter_model = PeftModel.from_pretrained(adapter_base, adapter_path)
+    adapter_model.eval()
+    return ModelBundle(model=adapter_model, tokenizer=tokenizer)
+
+
+def load_base_and_adapters(args: argparse.Namespace) -> Tuple[ModelBundle, ModelBundle, ModelBundle]:
     tokenizer = load_tokenizer(args.base_model_name)
     quant_config = get_quant_config(args.load_in_4bit)
     dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
     model_dtype = dtype if torch.cuda.is_available() else torch.float32
 
-    base_model = AutoModelForCausalLM.from_pretrained(
+    base_bundle = _load_model_bundle(args.base_model_name, quant_config, model_dtype, tokenizer)
+    adapter1_bundle = _load_adapter_bundle(args.base_model_name, args.adapter_path, quant_config, model_dtype, tokenizer)
+    adapter2_bundle = _load_adapter_bundle(
         args.base_model_name,
-        torch_dtype=model_dtype,
-        quantization_config=quant_config,
-        device_map="auto",
-        trust_remote_code=True,
+        args.adapter2_path,
+        quant_config,
+        model_dtype,
+        tokenizer,
     )
-    base_model.eval()
+    return base_bundle, adapter1_bundle, adapter2_bundle
 
-    finetuned_base = AutoModelForCausalLM.from_pretrained(
-        args.base_model_name,
-        torch_dtype=model_dtype,
-        quantization_config=quant_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    finetuned_model = PeftModel.from_pretrained(finetuned_base, args.adapter_path)
-    finetuned_model.eval()
 
-    return (
-        ModelBundle(model=base_model, tokenizer=tokenizer),
-        ModelBundle(model=finetuned_model, tokenizer=tokenizer),
-    )
+def load_base_and_adapter(args: argparse.Namespace) -> Tuple[ModelBundle, ModelBundle]:
+    # Backward-compatible helper used by older scripts.
+    base_bundle, adapter1_bundle, _ = load_base_and_adapters(args)
+    return base_bundle, adapter1_bundle
 
 
 def build_prompt(question: str, prompt_style: str) -> str:
@@ -496,9 +537,11 @@ def build_judge_messages(
     reference_answer: str,
     answer_a: str,
     answer_b: str,
+    answer_c: str,
 ) -> List[Dict[str, str]]:
     answer_a_final = extract_final_answer_from_response(answer_a)
     answer_b_final = extract_final_answer_from_response(answer_b)
+    answer_c_final = extract_final_answer_from_response(answer_c)
     rubric_text = (
         "You are an impartial evaluator.\n"
         "Score each model on a 0-10 scale for these dimensions:\n"
@@ -508,8 +551,8 @@ def build_judge_messages(
         "- clarity: readability, structure, and clarity\n"
         "- instruction_following: whether the response follows the requested format and task\n\n"
         "Weight the dimensions as:\n"
-        "- correctness: 0.40\n"
-        "- reasoning: 0.40\n"
+        "- correctness: 0.70\n"
+        "- reasoning: 0.10\n"
         "- completeness: 0.05\n"
         "- clarity: 0.05\n"
         "- instruction_following: 0.10\n\n"
@@ -521,7 +564,8 @@ def build_judge_messages(
         "{\n"
         '  "model_a": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
         '  "model_b": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
-        '  "winner": "A" | "B" | "tie",\n'
+        '  "model_c": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
+        '  "winner": "A" | "B" | "C" | "tie",\n'
         '  "summary": "..."\n'
         "}"
     )
@@ -533,6 +577,8 @@ def build_judge_messages(
         f"Model A response:\n{answer_a}\n\n"
         f"Model B extracted final answer:\n{answer_b_final}\n\n"
         f"Model B response:\n{answer_b}\n"
+        f"\nModel C extracted final answer:\n{answer_c_final}\n\n"
+        f"Model C response:\n{answer_c}\n"
     )
     return [
         {"role": "system", "content": rubric_text},
@@ -563,75 +609,87 @@ def judge_once(
     raise last_error
 
 
-def judge_pair(
+def _average_numeric_scores(score_blocks: List[Dict[str, Any]]) -> Dict[str, float]:
+    keys = list(DIMENSION_WEIGHTS.keys()) + ["total"]
+    return {
+        key: round(sum(float(block[key]) for block in score_blocks) / max(1, len(score_blocks)), 4)
+        for key in keys
+    }
+
+
+def judge_triplet(
     client: OpenAI,
     args: argparse.Namespace,
     question: str,
     reference_reasoning: str,
     reference_answer: str,
     base_answer: str,
-    finetuned_answer: str,
+    adapter1_answer: str,
+    adapter2_answer: str,
 ) -> Dict[str, Any]:
-    forward = judge_once(
-        client=client,
-        judge_model_name=args.judge_model_name,
-        messages=build_judge_messages(
-            question=question,
-            reference_reasoning=reference_reasoning,
-            reference_answer=reference_answer,
-            answer_a=base_answer,
-            answer_b=finetuned_answer,
-        ),
-        judge_retries=args.judge_retries,
-    )
-    reverse = judge_once(
-        client=client,
-        judge_model_name=args.judge_model_name,
-        messages=build_judge_messages(
-            question=question,
-            reference_reasoning=reference_reasoning,
-            reference_answer=reference_answer,
-            answer_a=finetuned_answer,
-            answer_b=base_answer,
-        ),
-        judge_retries=args.judge_retries,
-    )
-
-    base_forward = coerce_score_block(forward["model_a"])
-    finetuned_forward = coerce_score_block(forward["model_b"])
-    finetuned_reverse = coerce_score_block(reverse["model_a"])
-    base_reverse = coerce_score_block(reverse["model_b"])
-
-    base_scores = {
-        key: round((base_forward[key] + base_reverse[key]) / 2.0, 4)
-        for key in list(DIMENSION_WEIGHTS.keys()) + ["total"]
+    answers_by_model = {
+        "base": base_answer,
+        "adapter1": adapter1_answer,
+        "adapter2": adapter2_answer,
     }
-    finetuned_scores = {
-        key: round((finetuned_forward[key] + finetuned_reverse[key]) / 2.0, 4)
-        for key in list(DIMENSION_WEIGHTS.keys()) + ["total"]
-    }
+    round_orders = [
+        ("base", "adapter1", "adapter2"),
+        ("adapter1", "adapter2", "base"),
+        ("adapter2", "base", "adapter1"),
+    ]
 
-    margin = finetuned_scores["total"] - base_scores["total"]
-    if margin > 0.15:
-        winner = "finetuned"
-    elif margin < -0.15:
-        winner = "base"
-    else:
+    score_blocks: Dict[str, List[Dict[str, Any]]] = {"base": [], "adapter1": [], "adapter2": []}
+    round_raw: List[Dict[str, Any]] = []
+    round_summaries: List[str] = []
+    for model_a, model_b, model_c in round_orders:
+        raw = judge_once(
+            client=client,
+            judge_model_name=args.judge_model_name,
+            messages=build_judge_messages(
+                question=question,
+                reference_reasoning=reference_reasoning,
+                reference_answer=reference_answer,
+                answer_a=answers_by_model[model_a],
+                answer_b=answers_by_model[model_b],
+                answer_c=answers_by_model[model_c],
+            ),
+            judge_retries=args.judge_retries,
+        )
+        score_blocks[model_a].append(coerce_score_block(raw["model_a"]))
+        score_blocks[model_b].append(coerce_score_block(raw["model_b"]))
+        score_blocks[model_c].append(coerce_score_block(raw["model_c"]))
+        round_raw.append(raw)
+        round_summaries.append(str(raw.get("summary", "")).strip())
+
+    base_scores = _average_numeric_scores(score_blocks["base"])
+    adapter1_scores = _average_numeric_scores(score_blocks["adapter1"])
+    adapter2_scores = _average_numeric_scores(score_blocks["adapter2"])
+
+    totals = {
+        "base": base_scores["total"],
+        "adapter1": adapter1_scores["total"],
+        "adapter2": adapter2_scores["total"],
+    }
+    ranked = sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    if len(ranked) < 2 or (ranked[0][1] - ranked[1][1]) <= 0.15:
         winner = "tie"
+    else:
+        winner = ranked[0][0]
 
     return {
         "base_scores": base_scores,
-        "finetuned_scores": finetuned_scores,
+        "adapter1_scores": adapter1_scores,
+        "adapter2_scores": adapter2_scores,
         "base_reasoning": extract_reasoning_from_response(base_answer),
         "base_final_answer": extract_final_answer_from_response(base_answer),
-        "finetuned_reasoning": extract_reasoning_from_response(finetuned_answer),
-        "finetuned_final_answer": extract_final_answer_from_response(finetuned_answer),
+        "adapter1_reasoning": extract_reasoning_from_response(adapter1_answer),
+        "adapter1_final_answer": extract_final_answer_from_response(adapter1_answer),
+        "adapter2_reasoning": extract_reasoning_from_response(adapter2_answer),
+        "adapter2_final_answer": extract_final_answer_from_response(adapter2_answer),
         "reference_final_answer": reference_answer,
         "winner": winner,
-        "forward_summary": str(forward.get("summary", "")).strip(),
-        "reverse_summary": str(reverse.get("summary", "")).strip(),
-        "forward_raw": forward,
-        "reverse_raw": reverse,
+        "round_summaries": round_summaries,
+        "round_raw": round_raw,
     }
 
 
@@ -644,17 +702,29 @@ def mean(values: List[float]) -> float:
 def aggregate_results(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     keys = list(DIMENSION_WEIGHTS.keys()) + ["total"]
     base = {key: mean([sample["judge"]["base_scores"][key] for sample in samples]) for key in keys}
-    finetuned = {key: mean([sample["judge"]["finetuned_scores"][key] for sample in samples]) for key in keys}
+    adapter1 = {key: mean([sample["judge"]["adapter1_scores"][key] for sample in samples]) for key in keys}
+    adapter2 = {key: mean([sample["judge"]["adapter2_scores"][key] for sample in samples]) for key in keys}
 
-    win_counts = {"base": 0, "finetuned": 0, "tie": 0}
+    win_counts = {"base": 0, "adapter1": 0, "adapter2": 0, "tie": 0}
     for sample in samples:
-        win_counts[sample["judge"]["winner"]] += 1
+        winner = sample["judge"].get("winner", "tie")
+        if winner not in win_counts:
+            winner = "tie"
+        win_counts[winner] += 1
 
-    deltas = {key: round(finetuned[key] - base[key], 4) for key in keys}
+    overall_average = {
+        key: round((base[key] + adapter1[key] + adapter2[key]) / 3.0, 4)
+        for key in keys
+    }
+    delta_adapter1_vs_base = {key: round(adapter1[key] - base[key], 4) for key in keys}
+    delta_adapter2_vs_base = {key: round(adapter2[key] - base[key], 4) for key in keys}
     return {
         "base_average": base,
-        "finetuned_average": finetuned,
-        "delta": deltas,
+        "adapter1_average": adapter1,
+        "adapter2_average": adapter2,
+        "overall_average": overall_average,
+        "delta_adapter1_vs_base": delta_adapter1_vs_base,
+        "delta_adapter2_vs_base": delta_adapter2_vs_base,
         "win_counts": win_counts,
         "sample_count": len(samples),
     }
@@ -729,6 +799,7 @@ def write_output_snapshot(args: argparse.Namespace, results: List[Dict[str, Any]
         "config": {
             "base_model_name": args.base_model_name,
             "adapter_path": args.adapter_path,
+            "adapter2_path": args.adapter2_path,
             "judge_model_name": args.judge_model_name,
             "dataset_name": args.dataset_name,
             "dataset_config": args.dataset_config,
@@ -755,22 +826,31 @@ def judge_sample_task(
     sample_payload: Dict[str, Any],
 ) -> Dict[str, Any]:
     sample_payload = dict(sample_payload)
+    if "adapter1_answer" not in sample_payload:
+        sample_payload["adapter1_answer"] = sample_payload.get("finetuned_answer", sample_payload["base_answer"])
     sample_payload.setdefault("base_reasoning", extract_reasoning_from_response(sample_payload["base_answer"]))
     sample_payload.setdefault("base_final_answer", extract_final_answer_from_response(sample_payload["base_answer"]))
-    sample_payload.setdefault("finetuned_reasoning", extract_reasoning_from_response(sample_payload["finetuned_answer"]))
+    sample_payload.setdefault("adapter1_reasoning", extract_reasoning_from_response(sample_payload["adapter1_answer"]))
     sample_payload.setdefault(
-        "finetuned_final_answer",
-        extract_final_answer_from_response(sample_payload["finetuned_answer"]),
+        "adapter1_final_answer",
+        extract_final_answer_from_response(sample_payload["adapter1_answer"]),
+    )
+    sample_payload.setdefault("adapter2_answer", sample_payload.get("adapter1_answer", sample_payload["base_answer"]))
+    sample_payload.setdefault("adapter2_reasoning", extract_reasoning_from_response(sample_payload["adapter2_answer"]))
+    sample_payload.setdefault(
+        "adapter2_final_answer",
+        extract_final_answer_from_response(sample_payload["adapter2_answer"]),
     )
     client = make_judge_client(args.judge_api_key)
-    judge_result = judge_pair(
+    judge_result = judge_triplet(
         client=client,
         args=args,
         question=sample_payload["question"],
         reference_reasoning=sample_payload["reference_reasoning"],
         reference_answer=sample_payload["reference_answer"],
         base_answer=sample_payload["base_answer"],
-        finetuned_answer=sample_payload["finetuned_answer"],
+        adapter1_answer=sample_payload["adapter1_answer"],
+        adapter2_answer=sample_payload["adapter2_answer"],
     )
     return {
         **sample_payload,
@@ -780,6 +860,8 @@ def judge_sample_task(
 
 def main() -> None:
     args = parse_args()
+    if not args.judge_api_key:
+        raise ValueError("Missing judge API key. Pass --judge_api_key or set DASHSCOPE_API_KEY.")
     random.seed(args.seed)
     os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
     log_file = resolve_log_file(args)
@@ -788,14 +870,18 @@ def main() -> None:
     os.makedirs(os.path.dirname(answer_cache_file) or ".", exist_ok=True)
 
     print("Loading models...")
-    base_bundle, finetuned_bundle = load_base_and_adapter(args)
+    base_bundle, adapter1_bundle, adapter2_bundle = load_base_and_adapters(args)
 
     print("Loading evaluation dataset...")
     dataset = build_eval_dataset(args)
     results = load_existing_results(args.output_file, log_file) if args.resume else []
     cached_answers = load_answer_cache(answer_cache_file) if args.resume else {}
     results_by_index: Dict[int, Dict[str, Any]] = {int(sample["index"]): sample for sample in results}
-    completed_indices = set(results_by_index)
+    completed_indices = {
+        idx
+        for idx, sample in results_by_index.items()
+        if isinstance(sample.get("judge"), dict) and "adapter2_scores" in sample["judge"]
+    }
     if completed_indices:
         print(f"[resume] loaded {len(completed_indices)} completed samples from existing files.")
     if cached_answers:
@@ -822,7 +908,8 @@ def main() -> None:
             print(
                 f"[{idx + 1}/{total_samples}] "
                 f"base={judge_result['base_scores']['total']:.2f} "
-                f"finetuned={judge_result['finetuned_scores']['total']:.2f} "
+                f"adapter1={judge_result['adapter1_scores']['total']:.2f} "
+                f"adapter2={judge_result['adapter2_scores']['total']:.2f} "
                 f"winner={judge_result['winner']}"
             )
 
@@ -835,7 +922,10 @@ def main() -> None:
             while len(pending_futures) >= max(1, args.threads):
                 flush_completed(block=True)
 
-            if idx in cached_answers:
+            if idx in cached_answers and all(
+                key in cached_answers[idx]
+                for key in ["base_answer", "adapter1_answer", "adapter2_answer"]
+            ):
                 sample_payload = cached_answers[idx]
                 print(f"[{idx + 1}/{total_samples}] Reusing cached generated answers.")
             else:
@@ -854,9 +944,19 @@ def main() -> None:
                     top_p=args.top_p,
                 )
 
-                print(f"[{idx + 1}/{total_samples}] Generating finetuned answer...")
-                finetuned_answer = generate_answer(
-                    bundle=finetuned_bundle,
+                print(f"[{idx + 1}/{total_samples}] Generating adapter1 answer...")
+                adapter1_answer = generate_answer(
+                    bundle=adapter1_bundle,
+                    question=question,
+                    prompt_style=args.prompt_style,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                )
+
+                print(f"[{idx + 1}/{total_samples}] Generating adapter2 answer...")
+                adapter2_answer = generate_answer(
+                    bundle=adapter2_bundle,
                     question=question,
                     prompt_style=args.prompt_style,
                     max_new_tokens=args.max_new_tokens,
@@ -873,9 +973,12 @@ def main() -> None:
                     "base_answer": base_answer,
                     "base_reasoning": extract_reasoning_from_response(base_answer),
                     "base_final_answer": extract_final_answer_from_response(base_answer),
-                    "finetuned_answer": finetuned_answer,
-                    "finetuned_reasoning": extract_reasoning_from_response(finetuned_answer),
-                    "finetuned_final_answer": extract_final_answer_from_response(finetuned_answer),
+                    "adapter1_answer": adapter1_answer,
+                    "adapter1_reasoning": extract_reasoning_from_response(adapter1_answer),
+                    "adapter1_final_answer": extract_final_answer_from_response(adapter1_answer),
+                    "adapter2_answer": adapter2_answer,
+                    "adapter2_reasoning": extract_reasoning_from_response(adapter2_answer),
+                    "adapter2_final_answer": extract_final_answer_from_response(adapter2_answer),
                 }
                 append_log_record(answer_cache_file, sample_payload)
                 cached_answers[idx] = sample_payload

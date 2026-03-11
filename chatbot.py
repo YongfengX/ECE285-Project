@@ -1,4 +1,6 @@
 import argparse
+from datetime import datetime
+from pathlib import Path
 
 import torch
 from peft import PeftModel
@@ -13,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")
+    parser.add_argument("--log_dir", type=str, default="output/chat_logs")
     return parser.parse_args()
 
 
@@ -67,8 +70,29 @@ def generate_answer(
     return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
+def write_session_log(log_dir: str, answered_questions: list[dict[str, str]]) -> Path | None:
+    if not answered_questions:
+        return None
+
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    file_path = log_path / f"chatbot_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+    lines = [
+        f"Session ended at: {datetime.now().isoformat(timespec='seconds')}",
+        f"Answered questions: {len(answered_questions)}",
+        "",
+    ]
+    for index, record in enumerate(answered_questions, start=1):
+        lines.append(f"{index}. [{record['answered_at']}] {record['question']}")
+
+    file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return file_path
+
+
 def main() -> None:
     args = parse_args()
+    answered_questions: list[dict[str, str]] = []
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model_name, trust_remote_code=True, use_fast=False)
     if tokenizer.pad_token is None:
@@ -119,11 +143,27 @@ def main() -> None:
         ft_out = generate_answer(
             finetuned_model, tokenizer, question, args.max_new_tokens, args.temperature, args.top_p
         )
+        answered_questions.append(
+            {
+                "question": question,
+                "answered_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
 
         print("\n[Base]")
         print(base_out)
         print("\n[Finetuned OpenR1]")
         print(ft_out)
+
+    log_file = write_session_log(args.log_dir, answered_questions)
+    if log_file is None:
+        print("No answered questions to log.")
+        return
+
+    print("\nAnswered question log:")
+    for index, record in enumerate(answered_questions, start=1):
+        print(f"{index}. [{record['answered_at']}] {record['question']}")
+    print(f"\nLog saved to: {log_file}")
 
 
 if __name__ == "__main__":

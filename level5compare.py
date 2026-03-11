@@ -20,8 +20,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 # ---------------------------------------------------------------------------
 
 DIMENSION_WEIGHTS = {
-    "correctness": 0.70,
-    "reasoning": 0.10,
+    "correctness": 0.40,
+    "reasoning": 0.40,
     "completeness": 0.05,
     "clarity": 0.05,
     "instruction_following": 0.10,
@@ -44,12 +44,14 @@ class ModelBundle:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Standalone dataset-driven OpenR1 compare: base vs adapter1 with LLM judge."
+        description="Standalone dataset-driven OpenR1 compare: base vs adapter1 vs adapter2 with LLM judge."
     )
     parser.add_argument("--base_model_name", type=str, default="Qwen/Qwen3-4B")
     parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-2400")
-    parser.add_argument("--judge_model_name", type=str, default="qwen3.5-plus")
-    parser.add_argument("--judge_api_key", type=str, required=True)
+    parser.add_argument("--adapter2_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400")
+    parser.add_argument("--judge_model_name", type=str, default="qwen-plus")
+    parser.add_argument("--judge_api_key", type=str, default="sk-345e0f458bdd4291826b54bac8099ad2")
+    # competition_math Level 5 默认参数
     parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
     parser.add_argument("--dataset_config", type=str, default="default")
     parser.add_argument("--dataset_split", type=str, default="train")
@@ -59,11 +61,11 @@ def parse_args() -> argparse.Namespace:
         default="competition_math",
         choices=["auto", "gsm8k", "competition_math", "svamp", "commonsense_qa", "arc"],
     )
-    parser.add_argument("--max_samples", type=int, default=30)
+    parser.add_argument("--max_samples", type=int, default=30)       # ← 30 道
     parser.add_argument(
         "--levels",
         type=str,
-        default="",
+        default="Level 5",                                            # ← 只做 Level 5
         help="Comma-separated competition_math levels, e.g. 'Level 1,Level 3,Level 5'.",
     )
     parser.add_argument(
@@ -72,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="If > 0, sample up to this many examples per level.",
     )
-    parser.add_argument("--max_new_tokens", type=int, default=2048)
+    parser.add_argument("--max_new_tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--load_in_4bit", action="store_true")
@@ -81,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_file",
         type=str,
-        default="./outputs/chat_openr1_dataset_eval.json",
+        default="./outputs/compare_result_level5.json",               # ← 文件名对应
     )
     return parser.parse_args()
 
@@ -111,7 +113,7 @@ def load_tokenizer(model_name: str) -> AutoTokenizer:
     return tokenizer
 
 
-def load_base_and_adapters(args: argparse.Namespace) -> Tuple[ModelBundle, ModelBundle]:
+def load_base_and_adapters(args: argparse.Namespace) -> Tuple[ModelBundle, ModelBundle, ModelBundle]:
     tokenizer = load_tokenizer(args.base_model_name)
     quant_config = get_quant_config(args.load_in_4bit)
     dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
@@ -138,9 +140,21 @@ def load_base_and_adapters(args: argparse.Namespace) -> Tuple[ModelBundle, Model
     adapter1_model = PeftModel.from_pretrained(adapter1_base, args.adapter_path)
     adapter1_model.eval()
 
+    print("  Loading adapter2 model...")
+    adapter2_base = AutoModelForCausalLM.from_pretrained(
+        args.base_model_name,
+        torch_dtype=model_dtype,
+        quantization_config=quant_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    adapter2_model = PeftModel.from_pretrained(adapter2_base, args.adapter2_path)
+    adapter2_model.eval()
+
     return (
         ModelBundle(model=base_model, tokenizer=tokenizer),
         ModelBundle(model=adapter1_model, tokenizer=tokenizer),
+        ModelBundle(model=adapter2_model, tokenizer=tokenizer),
     )
 
 
@@ -183,7 +197,6 @@ def generate_answer(
             pad_token_id=bundle.tokenizer.pad_token_id,
         )
     gen_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
-    # Return raw decoded text — no canonicalization that would truncate reasoning
     return bundle.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
@@ -326,7 +339,10 @@ def build_eval_dataset(args: argparse.Namespace) -> Dataset:
             level_counts[row.get("level", "") or "[unknown]"] += 1
         print(f"[info] stratified sample: { {k: v for k, v in sorted(level_counts.items())} }")
 
+    # 随机打乱后取前 max_samples 道，保证样本多样性
     if args.max_samples > 0:
+        rng = random.Random(args.seed)
+        rng.shuffle(normalized_rows)
         normalized_rows = normalized_rows[: args.max_samples]
 
     return Dataset.from_list(normalized_rows)
@@ -393,6 +409,7 @@ def build_judge_messages(
     reference_answer: str,
     answer_a: str,
     answer_b: str,
+    answer_c: str,
 ) -> List[Dict[str, str]]:
     rubric = (
         "You are an impartial evaluator.\n"
@@ -408,7 +425,8 @@ def build_judge_messages(
         "{\n"
         '  "model_a": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
         '  "model_b": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
-        '  "winner": "A" | "B" | "tie",\n'
+        '  "model_c": {"correctness": 0-10, "reasoning": 0-10, "completeness": 0-10, "clarity": 0-10, "instruction_following": 0-10, "strengths": "...", "weaknesses": "..."},\n'
+        '  "winner": "A" | "B" | "C" | "tie",\n'
         '  "summary": "..."\n'
         "}"
     )
@@ -417,7 +435,8 @@ def build_judge_messages(
         f"Reference reasoning:\n{reference_reasoning or '[not provided]'}\n\n"
         f"Reference final answer:\n{reference_answer}\n\n"
         f"Model A response:\n{answer_a}\n\n"
-        f"Model B response:\n{answer_b}\n"
+        f"Model B response:\n{answer_b}\n\n"
+        f"Model C response:\n{answer_c}\n"
     )
     return [
         {"role": "system", "content": rubric},
@@ -455,7 +474,7 @@ def _average_numeric_scores(score_blocks: List[Dict[str, Any]]) -> Dict[str, flo
     }
 
 
-def judge_pair(
+def judge_triplet(
     client: OpenAI,
     args: argparse.Namespace,
     question: str,
@@ -463,20 +482,23 @@ def judge_pair(
     reference_answer: str,
     base_answer: str,
     adapter1_answer: str,
+    adapter2_answer: str,
 ) -> Dict[str, Any]:
     answers_by_model = {
         "base": base_answer,
         "adapter1": adapter1_answer,
+        "adapter2": adapter2_answer,
     }
     round_orders = [
-        ("base", "adapter1"),
-        ("adapter1", "base"),
+        ("base", "adapter1", "adapter2"),
+        ("adapter1", "adapter2", "base"),
+        ("adapter2", "base", "adapter1"),
     ]
 
-    score_blocks: Dict[str, List[Dict[str, Any]]] = {"base": [], "adapter1": []}
+    score_blocks: Dict[str, List[Dict[str, Any]]] = {"base": [], "adapter1": [], "adapter2": []}
     round_raw: List[Dict[str, Any]] = []
     round_summaries: List[str] = []
-    for model_a, model_b in round_orders:
+    for model_a, model_b, model_c in round_orders:
         round_result = judge_once(
             client=client,
             judge_model_name=args.judge_model_name,
@@ -486,20 +508,24 @@ def judge_pair(
                 reference_answer,
                 answers_by_model[model_a],
                 answers_by_model[model_b],
+                answers_by_model[model_c],
             ),
             judge_retries=args.judge_retries,
         )
         score_blocks[model_a].append(coerce_score_block(round_result["model_a"]))
         score_blocks[model_b].append(coerce_score_block(round_result["model_b"]))
+        score_blocks[model_c].append(coerce_score_block(round_result["model_c"]))
         round_raw.append(round_result)
         round_summaries.append(str(round_result.get("summary", "")).strip())
 
     base_scores = _average_numeric_scores(score_blocks["base"])
     adapter1_scores = _average_numeric_scores(score_blocks["adapter1"])
+    adapter2_scores = _average_numeric_scores(score_blocks["adapter2"])
 
     totals = {
         "base": base_scores["total"],
         "adapter1": adapter1_scores["total"],
+        "adapter2": adapter2_scores["total"],
     }
     ranked = sorted(totals.items(), key=lambda item: item[1], reverse=True)
     winner = "tie" if (len(ranked) < 2 or (ranked[0][1] - ranked[1][1]) <= 0.15) else ranked[0][0]
@@ -507,6 +533,7 @@ def judge_pair(
     return {
         "base_scores": base_scores,
         "adapter1_scores": adapter1_scores,
+        "adapter2_scores": adapter2_scores,
         "winner": winner,
         "round_summaries": round_summaries,
         "round_raw": round_raw,
@@ -525,18 +552,21 @@ def aggregate_results(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     keys = list(DIMENSION_WEIGHTS.keys()) + ["total"]
     base_avg = {k: mean([s["judge"]["base_scores"][k] for s in samples]) for k in keys}
     adapter1_avg = {k: mean([s["judge"]["adapter1_scores"][k] for s in samples]) for k in keys}
-    win_counts: Dict[str, int] = {"base": 0, "adapter1": 0, "tie": 0}
+    adapter2_avg = {k: mean([s["judge"]["adapter2_scores"][k] for s in samples]) for k in keys}
+    win_counts: Dict[str, int] = {"base": 0, "adapter1": 0, "adapter2": 0, "tie": 0}
     for s in samples:
         winner = s["judge"].get("winner", "tie")
         if winner not in win_counts:
             winner = "tie"
         win_counts[winner] += 1
-    overall_avg = {k: round((base_avg[k] + adapter1_avg[k]) / 2.0, 4) for k in keys}
+    overall_avg = {k: round((base_avg[k] + adapter1_avg[k] + adapter2_avg[k]) / 3.0, 4) for k in keys}
     return {
         "base_average": base_avg,
         "adapter1_average": adapter1_avg,
+        "adapter2_average": adapter2_avg,
         "overall_average": overall_avg,
         "delta_adapter1_vs_base": {k: round(adapter1_avg[k] - base_avg[k], 4) for k in keys},
+        "delta_adapter2_vs_base": {k: round(adapter2_avg[k] - base_avg[k], 4) for k in keys},
         "win_counts": win_counts,
         "sample_count": len(samples),
     }
@@ -548,6 +578,7 @@ def write_results(output_file: str, args: argparse.Namespace, results: List[Dict
         "config": {
             "base_model_name": args.base_model_name,
             "adapter_path": args.adapter_path,
+            "adapter2_path": args.adapter2_path,
             "judge_model_name": args.judge_model_name,
             "dataset_name": args.dataset_name,
             "dataset_config": args.dataset_config,
@@ -582,7 +613,7 @@ def main() -> None:
     os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
 
     print("Loading models...")
-    base_bundle, adapter1_bundle = load_base_and_adapters(args)
+    base_bundle, adapter1_bundle, adapter2_bundle = load_base_and_adapters(args)
 
     print("Loading evaluation dataset...")
     dataset = build_eval_dataset(args)
@@ -620,8 +651,19 @@ def main() -> None:
         print("[Adapter1 Raw Output]")
         print(adapter1_answer)
 
+        print(f"[{idx + 1}/{total_samples}] Generating adapter2 answer...")
+        adapter2_answer = generate_answer(
+            bundle=adapter2_bundle,
+            question=question,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            top_p=args.top_p,
+        )
+        print("[Adapter2 Raw Output]")
+        print(adapter2_answer)
+
         print(f"[{idx + 1}/{total_samples}] Judging with {args.judge_model_name}...")
-        judge_result = judge_pair(
+        judge_result = judge_triplet(
             client=client,
             args=args,
             question=question,
@@ -629,10 +671,12 @@ def main() -> None:
             reference_answer=reference_answer,
             base_answer=base_answer,
             adapter1_answer=adapter1_answer,
+            adapter2_answer=adapter2_answer,
         )
         print(
             f"  base={judge_result['base_scores']['total']:.2f} "
             f"adapter1={judge_result['adapter1_scores']['total']:.2f} "
+            f"adapter2={judge_result['adapter2_scores']['total']:.2f} "
             f"winner={judge_result['winner']}"
         )
 
@@ -644,6 +688,7 @@ def main() -> None:
             "level": level,
             "base_raw_output": base_answer,
             "adapter1_raw_output": adapter1_answer,
+            "adapter2_raw_output": adapter2_answer,
             "judge": judge_result,
         })
         write_results(args.output_file, args, results)
