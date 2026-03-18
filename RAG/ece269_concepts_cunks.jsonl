@@ -1,0 +1,103 @@
+{
+  "chunk_id": "ece269_concept_vector_space_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Vector Space Definition",
+  "source_file": "Linear Algebra Textbook",
+  "text": "A vector space V over a field F is a set equipped with two operations: vector addition and scalar multiplication. These operations must satisfy the following properties: closure, associativity, commutativity of addition, existence of an additive identity, existence of additive inverses, distributive properties, and compatibility with scalar multiplication. Examples include R^n, the space of polynomials, and the space of continuous functions.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_linear_independence",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Linear Independence",
+  "source_file": "Linear Algebra Textbook",
+  "text": "A set of vectors {v1, v2, ..., vk} in a vector space V is said to be linearly independent if the equation a1 v1 + a2 v2 + ... + ak vk = 0 implies that a1 = a2 = ... = ak = 0. If there exist non-zero coefficients such that the linear combination equals the zero vector, the vectors are linearly dependent.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_span_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Span of Vectors",
+  "source_file": "Linear Algebra Textbook",
+  "text": "The span of a set of vectors {v1, v2, ..., vk} is the set of all linear combinations of these vectors. Formally, span{v1,...,vk} = {a1 v1 + a2 v2 + ... + ak vk | a1,...,ak ∈ F}. The span represents the smallest subspace that contains all of the vectors.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_rank_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Matrix Rank",
+  "source_file": "Linear Algebra Textbook",
+  "text": "The rank of a matrix A is the dimension of its column space, which is the span of the columns of A. Equivalently, the rank is the number of pivot columns obtained after performing Gaussian elimination on the matrix. The rank indicates the maximum number of linearly independent columns (or rows) in the matrix.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_null_space_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Null Space",
+  "source_file": "Linear Algebra Textbook",
+  "text": "The null space of a matrix A, denoted N(A), is the set of all vectors x such that Ax = 0. It represents the solution space of the homogeneous system associated with A. The null space is always a subspace of R^n where n is the number of columns of A.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_rank_nullity_theorem",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Rank Nullity Theorem",
+  "source_file": "Linear Algebra Textbook",
+  "text": "The Rank-Nullity Theorem states that for an m×n matrix A, the dimension of the column space plus the dimension of the null space equals the number of columns of A. Formally, rank(A) + nullity(A) = n. This theorem connects the number of independent constraints in a system with the dimension of its solution space.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_basis_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Basis of a Vector Space",
+  "source_file": "Linear Algebra Textbook",
+  "text": "A basis of a vector space V is a set of vectors that is both linearly independent and spans the space V. Every vector in V can be written uniquely as a linear combination of the basis vectors. The number of vectors in any basis of V is called the dimension of V.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
+
+{
+  "chunk_id": "ece269_concept_dimension_definition",
+  "course": "ECE269",
+  "assignment": "Concepts",
+  "problem_id": "",
+  "sub_id": "",
+  "chunk_type": "concept",
+  "title": "Dimension of a Vector Space",
+  "source_file": "Linear Algebra Textbook",
+  "text": "The dimension of a vector space V is defined as the number of vectors in any basis of V. It represents the number of degrees of freedom or the minimum number of coordinates needed to specify any vector in the space. For example, R^n has dimension n.",
+  "jsonl_source": "ece269_concepts_chunks.jsonl"
+}
