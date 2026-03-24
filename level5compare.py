@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adapter_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-2400")
     parser.add_argument("--adapter2_path", type=str, default="./outputs/qwen3-4b-qlora-openr1-math/checkpoint-5400")
     parser.add_argument("--judge_model_name", type=str, default="qwen-plus")
-    parser.add_argument("--judge_api_key", type=str, default="sk-345e0f458bdd4291826b54bac8099ad2")
+    parser.add_argument("--judge_api_key", type=str, default="")
     # competition_math Level 5 默认参数
     parser.add_argument("--dataset_name", type=str, default="qwedsacf/competition_math")
     parser.add_argument("--dataset_config", type=str, default="default")
